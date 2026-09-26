@@ -1,5 +1,4 @@
 mode: ContinuousDelivery
-next-version: 1.1.0
 tag-prefix: '^v'
 commit-message-incrementing: Enabled
 major-version-bump-message: '(?is)(^[a-z][a-z0-9-]*(\([^)]+\))?!:|BREAKING CHANGE:)'

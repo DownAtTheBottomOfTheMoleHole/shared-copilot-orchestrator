@@ -31,6 +31,8 @@ jobs:
       - name: Calculate version with GitVersion
         id: gitversion
         uses: GitTools/actions/gitversion/execute@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
+        with:
+          configFilePath: GitVersion.yml
 
       - name: Publish GitHub release
         env:
