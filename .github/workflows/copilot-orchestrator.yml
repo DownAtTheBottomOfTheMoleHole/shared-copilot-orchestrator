@@ -60,29 +60,52 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Parse and sanitize review payload
-        id: parse
-        env:
-          TARGET_REPOSITORY: ${{ inputs.target_repository }}
-          TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
-          TARGET_SHA: ${{ inputs.target_sha }}
-          REVIEW_PAYLOAD: ${{ inputs.review_payload }}
-        run: node orchestrator/scripts/parse-review.js
-
       - name: Validate target repository token access
         env:
           GH_TOKEN: ${{ secrets.target_repo_token }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
         run: |
           set -euo pipefail
           if [[ "${TARGET_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
             echo "::error::target_repository (${TARGET_REPOSITORY}) must match the caller repository (${GITHUB_REPOSITORY})."
             exit 1
           fi
+          if [[ ! "${TARGET_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::target_pr_number must be a positive integer."
+            exit 1
+          fi
           if ! gh api "repos/${TARGET_REPOSITORY}" --jq '.full_name' >/dev/null; then
             echo "::error::target_repo_token cannot read ${TARGET_REPOSITORY}. Check the token's repository access and expiry."
             exit 1
           fi
+
+      # A pull_request_review event's review object does not include its
+      # inline comments, so fetch them and pass them to the parser as findings.
+      - name: Parse and sanitize review payload
+        id: parse
+        env:
+          GH_TOKEN: ${{ secrets.target_repo_token }}
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          REVIEW_PAYLOAD: ${{ inputs.review_payload }}
+        run: |
+          set -euo pipefail
+          payload_file="$(mktemp)"
+          printf '%s' "${REVIEW_PAYLOAD}" > "${payload_file}"
+          review_id="$(jq -r 'if type == "object" and (has("findings") | not) and (.id | type) == "number" then .id else empty end' "${payload_file}" 2>/dev/null || true)"
+          if [[ -n "${review_id}" ]]; then
+            comments_file="$(mktemp)"
+            gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}/reviews/${review_id}/comments" \
+              --jq '.[] | {path, line: (.line // .original_line // .position), body}' | jq -s '.' > "${comments_file}"
+            echo "Fetched $(jq 'length' "${comments_file}") inline comment(s) for review ${review_id}."
+            REVIEW_PAYLOAD="$(jq --slurpfile comments "${comments_file}" \
+              '{findings: ((if ((.body // "") | test("\\S")) then [{path: "review summary", body: .body}] else [] end) + $comments[0])}' \
+              "${payload_file}")"
+            export REVIEW_PAYLOAD
+          fi
+          node orchestrator/scripts/parse-review.js
 
       - name: Create issue in caller repository
         id: create
