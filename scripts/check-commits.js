@@ -38,7 +38,12 @@ function main() {
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const [sha, subject] = line.split("\u0000");
+      const separatorIndex = line.indexOf("\u0000");
+      if (separatorIndex === -1) {
+        return { sha: line, subject: "" };
+      }
+      const sha = line.slice(0, separatorIndex);
+      const subject = line.slice(separatorIndex + 1);
       return { sha, subject };
     })
     .filter(({ sha }) => !isEmptyCommit(sha))
