@@ -1,22 +1,82 @@
+# GitVersion 6 configuration for shared-copilot-orchestrator.
+#
+# Based on the DownAtTheBottomOfTheMoleHole org baseline (.github/GitVersion.yml),
+# adapted for this repository's merge-commit strategy: pull requests are merged
+# with "Merge pull request #n" commits, so individual Conventional Commit
+# subjects (not merge messages) drive version increments.
+---
+workflow: GitHubFlow/v1
 mode: ContinuousDelivery
-tag-prefix: '^v'
+# Accept both v1.2.3 and 1.2.3. This also lets next-version be written as a bare
+# SemVer such as 1.2.0; a mandatory prefix makes GitVersion reject it.
+tag-prefix: "[vV]?"
+semantic-version-format: Strict
 commit-message-incrementing: Enabled
-major-version-bump-message: '(?is)(^[a-z][a-z0-9-]*(\([^)]+\))?!:|BREAKING CHANGE:)'
+
+# Version sources, in order of preference:
+#   1. TaggedCommit          - latest vMAJOR.MINOR.PATCH tag reachable from HEAD.
+#   2. MergeMessage          - versions named in merge messages, e.g. "Merge branch 'release/2.0.0'".
+#   3. VersionInBranchName   - versions in branch names, e.g. release/2.0.0 or hotfix/1.0.3.
+#   4. ConfiguredNextVersion - manual override: set `next-version: 2.0.0` to force a baseline.
+#   5. TrackReleaseBranches  - versions from any open release branches.
+#   6. Fallback              - 0.0.0 from the first commit when nothing else applies.
+# GitVersion uses the highest resulting version. The release workflow refuses to
+# publish a version that is not newer than the latest existing release tag, so a
+# Fallback result caused by missing tags cannot publish a downgrade.
+strategies:
+  - TaggedCommit
+  - MergeMessage
+  - VersionInBranchName
+  - ConfiguredNextVersion
+  - TrackReleaseBranches
+  - Fallback
+
+# Conventional Commit increments. Keep these aligned with scripts/check-commits.js
+# and CONTRIBUTING.md.
+major-version-bump-message: '(?im)^[a-z]+(\([^)]+\))?!:|^BREAKING[ -]CHANGE:'
 minor-version-bump-message: '(?i)^feat(\([^)]+\))?:'
-patch-version-bump-message: '(?i)^(fix|perf)(\([^)]+\))?:'
-no-bump-message: '(?i)^(docs|style|test|build|ci|chore)(\([^)]+\))?:'
+patch-version-bump-message: '(?i)^(fix|perf|security)(\([^)]+\))?:'
+# A BREAKING CHANGE footer overrides a no-bump type such as `refactor:`.
+no-bump-message: '(?ism)\A(docs|style|test|build|ci|chore|refactor|revert)(\([^)]+\))?:(?!.*^BREAKING[ -]CHANGE:)'
+
 branches:
   main:
-    regex: ^main$
-    increment: Patch
-    label: ''
+    label: ""
+    # Only feat, fix, perf, security, and breaking commits create a new release.
+    # Docs, CI, and chore merges calculate the existing version, so the release
+    # workflow skips them instead of publishing an empty patch release.
+    increment: None
+
+  release:
+    mode: ManualDeployment
+    label: rc
+    increment: None
+
   feature:
-    regex: ^(?:features?[/-]|(?!(?:hotfix(?:es)?|releases?|support|pull(?:-requests?)?)/)[^/]+/)
-    increment: Minor
-    label: alpha
+    mode: ContinuousDelivery
+    label: alpha.{BranchName}
+    increment: Inherit
+
+  pull-request:
+    mode: ContinuousDelivery
+    label: pr.{Number}
+    increment: Inherit
+
   hotfix:
-    regex: ^hotfix(es)?[/-]
+    mode: ContinuousDelivery
+    label: beta.{BranchName}
     increment: Patch
-    label: hotfix
+    regex: ^hotfix(es)?[/-](?<BranchName>.+)
+    source-branches:
+      - main
+
+  # Catch-all for branches that match nothing above, such as copilot/* agent
+  # branches, so they still receive a unique pre-release version.
+  unknown:
+    mode: ContinuousDelivery
+    label: alpha.{BranchName}
+    increment: Inherit
+
 ignore:
   sha: []
+  paths: []
