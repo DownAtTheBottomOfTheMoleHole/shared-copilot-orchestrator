@@ -91,3 +91,29 @@ test("validates the commit range and rejects a non-conventional commit", () => {
     fs.rmSync(repositoryPath, { recursive: true, force: true });
   }
 });
+
+test("allows pull requests that only contain empty non-merge commits", () => {
+  const repositoryPath = fs.mkdtempSync(
+    path.join(os.tmpdir(), "orchestrator-empty-commits-"),
+  );
+
+  try {
+    git(repositoryPath, "init", "-q", "-b", "main");
+    git(repositoryPath, "config", "user.name", "Test");
+    git(repositoryPath, "config", "user.email", "test@example.invalid");
+    git(repositoryPath, "commit", "--allow-empty", "-qm", "docs: baseline");
+    const baseSha = git(repositoryPath, "rev-parse", "HEAD");
+
+    git(repositoryPath, "commit", "--allow-empty", "-qm", "Initial plan");
+    const headSha = git(repositoryPath, "rev-parse", "HEAD");
+    const result = spawnSync(
+      process.execPath,
+      [checkCommitsPath, baseSha, headSha],
+      { cwd: repositoryPath, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /No non-merge commits with file changes found/);
+  } finally {
+    fs.rmSync(repositoryPath, { recursive: true, force: true });
+  }
+});

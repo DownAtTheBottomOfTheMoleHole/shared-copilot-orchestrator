@@ -50,9 +50,10 @@ function main() {
     .map(({ subject }) => subject);
 
   if (subjects.length === 0) {
-    throw new Error(
+    console.log(
       "No non-merge commits with file changes found in the pull request.",
     );
+    return;
   }
 
   const invalidSubjects = subjects.filter(
