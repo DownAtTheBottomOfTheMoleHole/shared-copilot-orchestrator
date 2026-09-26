@@ -9,14 +9,25 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   tests-and-commits:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
 
       - name: Run parser and commit-check tests
         run: node --test tests/*.test.js
@@ -26,20 +37,17 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if git cat-file -e "${BASE_SHA}:.github/workflows/quality.yml" 2>/dev/null; then
-            node scripts/check-commits.js "$BASE_SHA" "$HEAD_SHA"
-          else
-            echo "Commit-message enforcement starts after the quality workflow is present on the base branch."
-          fi
+        run: node scripts/check-commits.js "$BASE_SHA" "$HEAD_SHA"
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Lint with MegaLinter
         uses: oxsecurity/megalinter@9949bad031045f366be2467e00e8371a7328a2e2 # v10.1.0
@@ -47,4 +55,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEFAULT_BRANCH: main
           VALIDATE_ALL_CODEBASE: true
-          ENABLE_LINTERS: JAVASCRIPT_ES,MARKDOWN_MARKDOWNLINT,YAML_YAMLLINT
+          ENABLE_LINTERS: ACTION_ACTIONLINT,JAVASCRIPT_ES,MARKDOWN_MARKDOWNLINT,YAML_YAMLLINT
