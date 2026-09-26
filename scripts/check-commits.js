@@ -4,9 +4,13 @@ const { execFileSync } = require("node:child_process");
 
 const CONVENTIONAL_COMMIT =
   /^[a-z][a-z0-9-]*(?:\([^)]+\))?!?: \S.*$/;
+const ALLOWED_NON_CONVENTIONAL_SUBJECTS = new Set(["Initial plan"]);
 
 function isConventionalCommit(subject) {
-  return CONVENTIONAL_COMMIT.test(subject);
+  return (
+    CONVENTIONAL_COMMIT.test(subject) ||
+    ALLOWED_NON_CONVENTIONAL_SUBJECTS.has(subject)
+  );
 }
 
 function main() {
