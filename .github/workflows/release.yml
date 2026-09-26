@@ -45,14 +45,14 @@ jobs:
 
           config = yaml.safe_load(Path("GitVersion.yml").read_text(encoding="utf-8"))
 
-          if isinstance(config, dict) and str(config.get("mode")) in {"MainLine", "Mainline"}:
+          if isinstance(config, dict) and str(config.get("mode")).lower() == "mainline":
               config["mode"] = "ContinuousDelivery"
 
           branches = config.get("branches") if isinstance(config, dict) else None
           if isinstance(branches, dict):
               for branch in branches.values():
                   if isinstance(branch, dict):
-                      if str(branch.get("mode")) in {"MainLine", "Mainline"}:
+                      if str(branch.get("mode")).lower() == "mainline":
                           branch.pop("mode", None)
                       if "is-mainline" in branch:
                           branch.pop("is-mainline", None)
