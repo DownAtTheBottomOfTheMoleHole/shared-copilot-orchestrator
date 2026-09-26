@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require("node:fs");
+const { randomUUID } = require("node:crypto");
 
 function getRequiredEnv(name) {
   const value = process.env[name];
@@ -72,6 +73,10 @@ function parseReviewPayload(rawPayload) {
     return payload;
   }
 
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+
   if (Array.isArray(payload.findings)) {
     return payload.findings;
   }
@@ -112,7 +117,10 @@ function writeOutput(name, value) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is not set");
   }
-  const delimiter = `EOF_${name.toUpperCase()}_${Date.now()}`;
+  let delimiter;
+  do {
+    delimiter = `EOF_${name.toUpperCase()}_${randomUUID()}`;
+  } while (value.includes(delimiter));
   fs.appendFileSync(outputPath, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
 }
 
