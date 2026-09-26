@@ -26,9 +26,9 @@ jobs:
       - name: Install GitVersion
         uses: GitTools/actions/gitversion/setup@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
         with:
-          versionSpec: 5.12.x
+          versionSpec: 6.8.2
 
-      - name: Prepare legacy GitVersion config
+      - name: Prepare release GitVersion config
         run: |
           python - <<'PY'
           import os
@@ -36,9 +36,14 @@ jobs:
           from pathlib import Path
 
           source = Path("GitVersion.yml").read_text()
-          source = source.replace("MainLine", "Mainline")
-          source = re.sub(r"(?m)^[ \t]+mode: Mainline\r?\n", "", source)
-          source = re.sub(r"^(\s*)label:", r"\1tag:", source, flags=re.MULTILINE)
+          source = re.sub(
+              r"(?m)^mode:\s*Main[Ll]ine\s*$",
+              "mode: ContinuousDelivery",
+              source,
+              count=1,
+          )
+          source = re.sub(r"(?m)^[ \t]+mode:\s*Main[Ll]ine\s*\r?\n", "", source)
+          source = re.sub(r"(?m)^[ \t]+is-mainline:\s*(?:true|false)\s*\r?\n", "", source)
 
           output = Path(os.environ["RUNNER_TEMP"]) / "GitVersion.release.yml"
           output.write_text(source)
