@@ -1,4 +1,4 @@
-mode: MainLine
+mode: Mainline
 next-version: 0.1.0
 tag-prefix: '[vV]?'
 commit-message-incrementing: Enabled
@@ -9,7 +9,7 @@ no-bump-message: '(?i)^(docs|style|test|build|ci|chore)(\([^)]+\))?:'
 branches:
   main:
     regex: ^main$
-    mode: MainLine
+    mode: Mainline
     label: ''
     increment: Patch
     is-mainline: true
