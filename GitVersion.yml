@@ -7,17 +7,19 @@
 ---
 workflow: GitHubFlow/v1
 mode: ContinuousDelivery
-# Accept both v1.2.3 and 1.2.3. This also lets next-version be written as a bare
-# SemVer such as 1.2.0; a mandatory prefix makes GitVersion reject it.
-tag-prefix: "[vV]?"
+# Only lowercase v-prefixed tags (v1.2.3) are version sources; this matches the
+# tag ruleset (^v\d+\.\d+\.\d+$). GitVersion matches prefixes case-insensitively,
+# so (?-i:...) is needed to ignore V1.2.3. Versions in next-version, merge
+# messages and release branch names must carry the same prefix (v2.0.0).
+tag-prefix: "(?-i:v)"
 semantic-version-format: Strict
 commit-message-incrementing: Enabled
 
 # Version sources, in order of preference:
 #   1. TaggedCommit          - latest vMAJOR.MINOR.PATCH tag reachable from HEAD.
-#   2. MergeMessage          - versions named in merge messages, e.g. "Merge branch 'release/2.0.0'".
-#   3. VersionInBranchName   - versions in branch names, e.g. release/2.0.0 or hotfix/1.0.3.
-#   4. ConfiguredNextVersion - manual override: set `next-version: 2.0.0` to force a baseline.
+#   2. MergeMessage          - versions named in merge messages, e.g. "Merge branch 'release/v2.0.0'".
+#   3. VersionInBranchName   - versions in release branch names, e.g. release/v2.0.0.
+#   4. ConfiguredNextVersion - manual override: set `next-version: v2.0.0` to force a baseline.
 #   5. TrackReleaseBranches  - versions from any open release branches.
 #   6. Fallback              - 0.0.0 from the first commit when nothing else applies.
 # GitVersion uses the highest resulting version. The release workflow refuses to

@@ -34,14 +34,14 @@ Changes merged to `main` are versioned by GitVersion and published as GitHub rel
 
 [`GitVersion.yml`](GitVersion.yml) resolves the version using these strategies, highest result wins:
 
-1. **Tagged commit**: the latest `vMAJOR.MINOR.PATCH` (or unprefixed) tag reachable from the commit.
-2. **Merge message**: a version in a merge commit message, such as a merged `release/2.0.0` branch.
-3. **Branch name**: a version in the branch name, for example `release/2.0.0` or `hotfix/1.0.2`.
-4. **Configured next version**: an optional `next-version` in `GitVersion.yml`.
+1. **Tagged commit**: the latest `vMAJOR.MINOR.PATCH` tag reachable from the commit. Only lowercase `v`-prefixed tags count; `V1.2.3` and `1.2.3` are ignored.
+2. **Merge message**: a version in a merge commit message, such as a merged `release/v2.0.0` branch.
+3. **Branch name**: a version in a release branch name, for example `release/v2.0.0`.
+4. **Configured next version**: an optional `next-version` in `GitVersion.yml`, written with the prefix, for example `v2.0.0`.
 5. **Release branches**: versions from open release branches.
 6. **Fallback**: `0.0.0` plus the calculated increment when no tags exist.
 
-To force a version, for example to start a new major line, either merge a `release/X.Y.Z` branch or temporarily add `next-version: X.Y.Z` to `GitVersion.yml` and remove it once the release is tagged. Pre-release labels are applied on non-main branches (`alpha` for feature and other branches, `beta` for hotfix, `rc` for release, `pr` for pull requests); only `main` publishes releases. The release workflow refuses to publish a version older than the latest tag, which protects against a Fallback result if tags are missing.
+To force a version, for example to start a new major line, either merge a `release/vX.Y.Z` branch or temporarily add `next-version: vX.Y.Z` to `GitVersion.yml` and remove it once the release is tagged. Pre-release labels are applied on non-main branches (`alpha` for feature and other branches, `beta` for hotfix, `rc` for release, `pr` for pull requests); only `main` publishes releases. The release workflow refuses to publish a version older than the latest tag, which protects against a Fallback result if tags are missing.
 
 Check a version locally with GitVersion 6.8:
 
