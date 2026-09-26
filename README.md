@@ -11,18 +11,11 @@ Enterprise reusable GitHub Actions workflow for converting Copilot code review f
 
 ## Architecture
 
-```text
-[Caller Repo PR Comment/Review Payload]
-                  |
-                  v
-     [shared-copilot-orchestrator]
-     (.github/workflows/workflow_call)
-                  |
-                  v
-        [Issue Created in Caller Repo]
-                  |
-                  v
- [@copilot Mentioned -> Copilot Coding Agent Fix]
+```mermaid
+flowchart TD
+    A[Caller Repo PR Comment/Review Payload] --> B[shared-copilot-orchestrator<br />(.github/workflows/workflow_call)]
+    B --> C[Issue Created in Caller Repo]
+    C --> D[@copilot Mentioned -> Copilot Coding Agent Fix]
 ```
 
 ## What this workflow does

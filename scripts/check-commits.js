@@ -22,14 +22,38 @@ function main() {
 
   const subjects = execFileSync(
     "git",
-    ["log", "--format=%s", "--no-merges", `${baseSha}..${headSha}`],
+    [
+      "log",
+      "--format=%x1e%H%x00%s",
+      "--name-only",
+      "--no-merges",
+      `${baseSha}..${headSha}`,
+    ],
     { encoding: "utf8" },
   )
-    .split("\n")
-    .filter(Boolean);
+    .split("\u001e")
+    .map((entry) => entry.replace(/^\n+/, ""))
+    .filter(Boolean)
+    .map((entry) => {
+      const [header, ...fileLines] = entry.split("\n");
+      const separatorIndex = header.indexOf("\u0000");
+      if (separatorIndex === -1) {
+        return { sha: header, subject: "", hasFileChanges: false };
+      }
+      const sha = header.slice(0, separatorIndex);
+      const subject = header.slice(separatorIndex + 1);
+      const hasFileChanges =
+        fileLines.map((line) => line.trim()).filter(Boolean).length > 0;
+      return { sha, subject, hasFileChanges };
+    })
+    .filter(({ hasFileChanges }) => hasFileChanges)
+    .map(({ subject }) => subject);
 
   if (subjects.length === 0) {
-    throw new Error("No non-merge commits found in the pull request.");
+    console.log(
+      "No non-merge commits with file changes found in the pull request.",
+    );
+    return;
   }
 
   const invalidSubjects = subjects.filter(

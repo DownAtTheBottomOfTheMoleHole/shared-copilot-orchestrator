@@ -42,7 +42,7 @@ jobs:
           fetch-depth: 0
 
       - name: Lint with MegaLinter
-        uses: oxsecurity/megalinter@7417b1089e2c7de93510f1901d656ddf60bb024f # v10.1.0
+        uses: oxsecurity/megalinter@9949bad031045f366be2467e00e8371a7328a2e2 # v10.1.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEFAULT_BRANCH: main
