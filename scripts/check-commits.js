@@ -9,16 +9,6 @@ function isConventionalCommit(subject) {
   return CONVENTIONAL_COMMIT.test(subject);
 }
 
-function isEmptyCommit(sha) {
-  return execFileSync(
-    "git",
-    ["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
-    { encoding: "utf8" },
-  )
-    .trim()
-    .length === 0;
-}
-
 function main() {
   const [baseSha, headSha] = process.argv.slice(2);
   if (
@@ -32,21 +22,31 @@ function main() {
 
   const subjects = execFileSync(
     "git",
-    ["log", "--format=%H%x00%s", "--no-merges", `${baseSha}..${headSha}`],
+    [
+      "log",
+      "--format=%x1e%H%x00%s",
+      "--name-only",
+      "--no-merges",
+      `${baseSha}..${headSha}`,
+    ],
     { encoding: "utf8" },
   )
-    .split("\n")
+    .split("\u001e")
+    .map((entry) => entry.trim())
     .filter(Boolean)
-    .map((line) => {
-      const separatorIndex = line.indexOf("\u0000");
+    .map((entry) => {
+      const [header, ...fileLines] = entry.split("\n");
+      const separatorIndex = header.indexOf("\u0000");
       if (separatorIndex === -1) {
-        return { sha: line, subject: "" };
+        return { sha: header, subject: "", hasFileChanges: false };
       }
-      const sha = line.slice(0, separatorIndex);
-      const subject = line.slice(separatorIndex + 1);
-      return { sha, subject };
+      const sha = header.slice(0, separatorIndex);
+      const subject = header.slice(separatorIndex + 1);
+      const hasFileChanges =
+        fileLines.map((line) => line.trim()).filter(Boolean).length > 0;
+      return { sha, subject, hasFileChanges };
     })
-    .filter(({ sha }) => !isEmptyCommit(sha))
+    .filter(({ hasFileChanges }) => hasFileChanges)
     .map(({ subject }) => subject);
 
   if (subjects.length === 0) {
