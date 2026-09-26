@@ -1,0 +1,50 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  tests-and-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Run parser and commit-check tests
+        run: node --test tests/*.test.js
+
+      - name: Check pull request commit messages
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git cat-file -e "${BASE_SHA}:.github/workflows/quality.yml" 2>/dev/null; then
+            node scripts/check-commits.js "$BASE_SHA" "$HEAD_SHA"
+          else
+            echo "Commit-message enforcement starts after the quality workflow is present on the base branch."
+          fi
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Lint with MegaLinter
+        uses: oxsecurity/megalinter@7417b1089e2c7de93510f1901d656ddf60bb024f # v10.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: main
+          VALIDATE_ALL_CODEBASE: true
+          ENABLE_LINTERS: JAVASCRIPT_ES,MARKDOWN_MARKDOWNLINT,YAML_YAMLLINT

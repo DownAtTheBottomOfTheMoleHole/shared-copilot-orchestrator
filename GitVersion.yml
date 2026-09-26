@@ -1,0 +1,15 @@
+mode: Mainline
+next-version: 0.1.0
+tag-prefix: '[vV]?'
+commit-message-incrementing: Enabled
+major-version-bump-message: '(?is)(^[a-z][a-z0-9-]*(\([^)]+\))?!:|BREAKING CHANGE:)'
+minor-version-bump-message: '(?i)^feat(\([^)]+\))?:'
+patch-version-bump-message: '(?i)^(fix|perf)(\([^)]+\))?:'
+no-bump-message: '(?i)^(docs|style|test|build|ci|chore)(\([^)]+\))?:'
+branches:
+  main:
+    regex: ^main$
+    mode: Mainline
+    label: ''
+    increment: Patch
+    is-mainline: true
