@@ -35,7 +35,7 @@ jobs:
           import re
           from pathlib import Path
 
-          source = Path("GitVersion.yml").read_text()
+          source = Path("GitVersion.yml").read_text(encoding="utf-8")
           source = re.sub(
               r"(?m)^mode:\s*Main[Ll]ine\s*$",
               "mode: ContinuousDelivery",
@@ -46,7 +46,7 @@ jobs:
           source = re.sub(r"(?m)^[ \t]+is-mainline:\s*(?:true|false)\s*\r?\n", "", source)
 
           output = Path(os.environ["RUNNER_TEMP"]) / "GitVersion.release.yml"
-          output.write_text(source)
+          output.write_text(source, encoding="utf-8")
           print(f"Wrote {output}")
           PY
 
