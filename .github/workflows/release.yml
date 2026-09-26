@@ -23,11 +23,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install GitVersion
+        uses: GitTools/actions/gitversion/setup@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
+        with:
+          versionSpec: 6.8.x
+
       - name: Calculate version with GitVersion
         id: gitversion
-        uses: GitTools/actions/gitversion/execute@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
+        uses: GitTools/actions/gitversion/execute@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
         with:
-          useConfigFile: true
           configFilePath: GitVersion.yml
 
       - name: Publish GitHub release
