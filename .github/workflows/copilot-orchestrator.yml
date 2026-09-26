@@ -20,6 +20,10 @@ on:
         required: false
         type: string
         default: ""
+    secrets:
+      target_repo_token:
+        description: token with issue write access to target_repository
+        required: true
 
 jobs:
   create-copilot-issue:
@@ -47,7 +51,7 @@ jobs:
 
       - name: Validate target repository token access
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.target_repo_token }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
         run: |
           set -euo pipefail
@@ -55,7 +59,7 @@ jobs:
 
       - name: Create issue in caller repository
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.target_repo_token }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
           ISSUE_TITLE: ${{ steps.parse.outputs.issue_title }}
           ISSUE_BODY: ${{ steps.parse.outputs.issue_body }}
