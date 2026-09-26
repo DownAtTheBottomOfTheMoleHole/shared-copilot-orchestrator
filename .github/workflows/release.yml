@@ -37,6 +37,7 @@ jobs:
 
           source = Path("GitVersion.yml").read_text()
           source = source.replace("MainLine", "Mainline")
+          source = re.sub(r"(?m)^ {4}mode: Mainline\n", "", source)
           source = re.sub(r"^(\s*)label:", r"\1tag:", source, flags=re.MULTILINE)
 
           output = Path(os.environ["RUNNER_TEMP"]) / "GitVersion.release.yml"
