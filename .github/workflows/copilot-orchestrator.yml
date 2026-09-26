@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       target_repository:
-        description: owner/repo that should receive the generated issue
+        description: owner/repo that should receive the generated issue; must be the caller repository
         required: true
         type: string
       target_pr_number:
@@ -20,27 +20,45 @@ on:
         required: false
         type: string
         default: ""
+      assign_copilot:
+        description: assign the issue to Copilot cloud agent when actionable findings are parsed
+        required: false
+        type: boolean
+        default: true
     secrets:
       target_repo_token:
-        description: token with issue write access to target_repository
+        description: user token (fine-grained PAT) for the caller repository; see README for required permissions
         required: true
+    outputs:
+      issue_url:
+        description: URL of the created issue
+        value: ${{ jobs.create-copilot-issue.outputs.issue_url }}
+      actionable_count:
+        description: number of actionable findings parsed from the payload
+        value: ${{ jobs.create-copilot-issue.outputs.actionable_count }}
+      copilot_assigned:
+        description: "'true' when the issue was assigned to Copilot"
+        value: ${{ jobs.create-copilot-issue.outputs.copilot_assigned }}
 
 jobs:
   create-copilot-issue:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
-      issues: write
-      pull-requests: read
       contents: read
+    outputs:
+      issue_url: ${{ steps.create.outputs.issue_url }}
+      actionable_count: ${{ steps.parse.outputs.actionable_count }}
+      copilot_assigned: ${{ steps.assign.outputs.copilot_assigned || 'false' }}
     steps:
-      - name: Check out central orchestrator repository
+      - name: Check out orchestrator scripts at the called workflow version
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: orchestrator
-          persist-credentials: false
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Parse and sanitize review payload
         id: parse
@@ -58,12 +76,16 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${TARGET_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
-            echo "Target repository must match the caller repository" >&2
+            echo "::error::target_repository (${TARGET_REPOSITORY}) must match the caller repository (${GITHUB_REPOSITORY})."
             exit 1
           fi
-          gh api "repos/${TARGET_REPOSITORY}" --jq '.full_name' >/dev/null
+          if ! gh api "repos/${TARGET_REPOSITORY}" --jq '.full_name' >/dev/null; then
+            echo "::error::target_repo_token cannot read ${TARGET_REPOSITORY}. Check the token's repository access and expiry."
+            exit 1
+          fi
 
       - name: Create issue in caller repository
+        id: create
         env:
           GH_TOKEN: ${{ secrets.target_repo_token }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
@@ -73,7 +95,28 @@ jobs:
           set -euo pipefail
           body_file="$(mktemp)"
           printf '%s\n' "${ISSUE_BODY}" > "${body_file}"
-          gh issue create \
+          issue_url="$(gh issue create \
             --repo "${TARGET_REPOSITORY}" \
             --title "${ISSUE_TITLE}" \
-            --body-file "${body_file}"
+            --body-file "${body_file}")"
+          echo "issue_url=${issue_url}" >> "${GITHUB_OUTPUT}"
+          echo "Created ${issue_url}" >> "${GITHUB_STEP_SUMMARY}"
+
+      # Copilot cloud agent starts when an issue is assigned to it; mentioning
+      # @copilot in an issue body does not start a session.
+      - name: Assign issue to Copilot
+        id: assign
+        if: inputs.assign_copilot && steps.parse.outputs.actionable_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.target_repo_token }}
+          ISSUE_URL: ${{ steps.create.outputs.issue_url }}
+        run: |
+          set -euo pipefail
+          if ! gh issue edit "${ISSUE_URL}" --add-assignee "@copilot"; then
+            echo "::warning::Created ${ISSUE_URL} but could not assign it to Copilot. target_repo_token must be a user token (not GITHUB_TOKEN or a GitHub App installation token) for a user with Copilot cloud agent access, and Copilot cloud agent must be enabled for the repository. Set assign_copilot: false to skip assignment."
+            echo "copilot_assigned=false" >> "${GITHUB_OUTPUT}"
+            echo "Could not assign ${ISSUE_URL} to Copilot; see the run warnings." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          echo "copilot_assigned=true" >> "${GITHUB_OUTPUT}"
+          echo "Assigned ${ISSUE_URL} to Copilot" >> "${GITHUB_STEP_SUMMARY}"

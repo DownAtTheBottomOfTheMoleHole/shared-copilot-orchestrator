@@ -41,23 +41,45 @@ function runParser(reviewPayload) {
 }
 
 function parseOutputs(output) {
-  const match =
-    /^issue_title<<([^\n]+)\n([\s\S]*?)\n\1\nissue_body<<([^\n]+)\n([\s\S]*?)\n\3\n$/.exec(
-      output,
-    );
-  assert.ok(match, "expected title and body to be written as output records");
-  return { title: match[2], body: match[4] };
+  const records = {};
+  const recordPattern = /^([a-z_]+)<<([^\n]+)\n([\s\S]*?)\n\2\n/;
+  let remaining = output;
+  while (remaining.length > 0) {
+    const match = recordPattern.exec(remaining);
+    assert.ok(match, `unexpected output record format: ${remaining}`);
+    records[match[1]] = match[3];
+    remaining = remaining.slice(match[0].length);
+  }
+  assert.deepEqual(
+    Object.keys(records),
+    ["issue_title", "issue_body", "actionable_count"],
+    "expected title, body, and actionable count output records",
+  );
+  return {
+    title: records.issue_title,
+    body: records.issue_body,
+    actionableCount: Number(records.actionable_count),
+  };
 }
 
 test("malformed, null, and empty payloads produce a no-findings result", () => {
   for (const payload of ["{", "null", ""]) {
     const result = runParser(payload);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(
-      parseOutputs(result.output).body,
-      /No structured findings were provided/,
-    );
+    const { body, actionableCount } = parseOutputs(result.output);
+    assert.match(body, /No structured findings were provided/);
+    assert.match(body, /No actionable findings were parsed/);
+    assert.equal(actionableCount, 0);
   }
+});
+
+test("findings without a body are not actionable", () => {
+  const result = runParser(
+    JSON.stringify({ findings: [{ path: "a.js", line: 1, body: "   " }] }),
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(parseOutputs(result.output).actionableCount, 0);
 });
 
 test("structured findings are sanitized and included in the issue output", () => {
@@ -75,13 +97,15 @@ test("structured findings are sanitized and included in the issue output", () =>
   );
 
   assert.equal(result.status, 0, result.stderr);
-  const { title, body } = parseOutputs(result.output);
+  const { title, body, actionableCount } = parseOutputs(result.output);
   assert.equal(title, "Copilot review findings for PR #42");
   assert.match(body, /&lt;unsafe&gt;/);
   assert.match(body, /@​everyone/);
   assert.match(body, /&lt;script&gt;/);
   assert.doesNotMatch(body, /@everyone/);
-  assert.match(body, /@copilot please propose and implement a fix/);
+  assert.doesNotMatch(body, /@copilot/);
+  assert.match(body, /Copilot: please propose and implement a fix/);
+  assert.equal(actionableCount, 1);
 });
 
 test("legacy review body payloads produce an actionable finding", () => {
@@ -90,9 +114,10 @@ test("legacy review body payloads produce an actionable finding", () => {
   );
 
   assert.equal(result.status, 0, result.stderr);
-  const { body } = parseOutputs(result.output);
+  const { body, actionableCount } = parseOutputs(result.output);
   assert.match(body, /A finding from a single review payload/);
-  assert.match(body, /@copilot please propose and implement a fix/);
+  assert.match(body, /Copilot: please propose and implement a fix/);
+  assert.equal(actionableCount, 1);
 });
 
 test("invalid required metadata exits without writing issue outputs", () => {
