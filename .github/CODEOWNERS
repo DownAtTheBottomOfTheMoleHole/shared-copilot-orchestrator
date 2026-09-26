@@ -1,2 +1,7 @@
-# Enforce maintainer approval for all workflow changes.
-/.github/workflows/* @DownAtTheBottomOfTheMoleHole/main-maintainers
+# Default owners for everything in the repository.
+* @DownAtTheBottomOfTheMoleHole/the-main-team
+
+# Enforce maintainer approval for workflow, script and versioning changes.
+/.github/ @DownAtTheBottomOfTheMoleHole/the-main-team
+/scripts/ @DownAtTheBottomOfTheMoleHole/the-main-team
+/GitVersion.yml @DownAtTheBottomOfTheMoleHole/the-main-team

@@ -1,0 +1,6 @@
+# job.workflow_repository and job.workflow_sha are documented job context
+# properties for reusable workflows that actionlint does not yet recognise.
+paths:
+  .github/workflows/copilot-orchestrator.yml:
+    ignore:
+      - 'property "workflow_(repository|sha)" is not defined'

@@ -143,9 +143,11 @@ function main() {
     renderedFindings.length > 0
       ? renderedFindings.map((finding) => finding.text).join("\n")
       : "No structured findings were provided in the payload.";
+  // Copilot is started by assigning the issue in the workflow; a mention in an
+  // issue body does not trigger it, so this line is the task instruction only.
   const handoffLine =
     actionableFindings.length > 0
-      ? "@copilot please propose and implement a fix for the findings above."
+      ? "Copilot: please propose and implement a fix for the findings above."
       : "No actionable findings were parsed. Verify caller payload mapping before requesting an automated fix.";
 
   const issueTitle = `Copilot review findings for PR #${targetPrNumber}`;
@@ -164,6 +166,7 @@ function main() {
 
   writeOutput("issue_title", issueTitle);
   writeOutput("issue_body", issueBody);
+  writeOutput("actionable_count", String(actionableFindings.length));
 }
 
 try {

@@ -25,6 +25,8 @@ test("accepts conventional subjects with optional scope and breaking marker", ()
     "fix(parser): handle null payload",
     "feat(api)!: change workflow inputs",
     "docs: update usage",
+    "security(parser): escape mentions",
+    "revert: undo release change",
     "Initial plan",
   ]) {
     assert.equal(isConventionalCommit(subject), true, subject);
@@ -37,6 +39,8 @@ test("rejects non-conventional or empty subjects", () => {
     "feat: ",
     "Fix(parser): capitalize type",
     "feat(parser) change syntax",
+    "feet: typo in type",
+    "infra: unknown type",
   ]) {
     assert.equal(isConventionalCommit(subject), false, subject);
   }

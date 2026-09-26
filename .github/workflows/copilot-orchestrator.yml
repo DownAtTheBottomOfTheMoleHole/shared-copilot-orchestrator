@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       target_repository:
-        description: owner/repo that should receive the generated issue
+        description: owner/repo that should receive the generated issue; must be the caller repository
         required: true
         type: string
       target_pr_number:
@@ -20,50 +20,109 @@ on:
         required: false
         type: string
         default: ""
+      assign_copilot:
+        description: assign the issue to Copilot cloud agent when actionable findings are parsed
+        required: false
+        type: boolean
+        default: true
     secrets:
       target_repo_token:
-        description: token with issue write access to target_repository
+        description: user token (fine-grained PAT) for the caller repository; see README for required permissions
         required: true
+    outputs:
+      issue_url:
+        description: URL of the created issue
+        value: ${{ jobs.create-copilot-issue.outputs.issue_url }}
+      actionable_count:
+        description: number of actionable findings parsed from the payload
+        value: ${{ jobs.create-copilot-issue.outputs.actionable_count }}
+      copilot_assigned:
+        description: "'true' when the issue was assigned to Copilot"
+        value: ${{ jobs.create-copilot-issue.outputs.copilot_assigned }}
 
 jobs:
   create-copilot-issue:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
-      issues: write
-      pull-requests: read
       contents: read
+    outputs:
+      issue_url: ${{ steps.create.outputs.issue_url }}
+      actionable_count: ${{ steps.parse.outputs.actionable_count }}
+      copilot_assigned: ${{ steps.assign.outputs.copilot_assigned || 'false' }}
     steps:
-      - name: Check out central orchestrator repository
+      - name: Check out orchestrator scripts at the called workflow version
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: orchestrator
-          persist-credentials: false
           fetch-depth: 1
+          persist-credentials: false
 
+      - name: Validate target repository token access
+        env:
+          GH_TOKEN: ${{ secrets.target_repo_token }}
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+        run: |
+          set -euo pipefail
+          if [[ "${TARGET_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
+            echo "::error::target_repository (${TARGET_REPOSITORY}) must match the caller repository (${GITHUB_REPOSITORY})."
+            exit 1
+          fi
+          if [[ ! "${TARGET_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::target_pr_number must be a positive integer."
+            exit 1
+          fi
+          if ! gh api "repos/${TARGET_REPOSITORY}" --jq '.full_name' >/dev/null; then
+            echo "::error::target_repo_token cannot read ${TARGET_REPOSITORY}. Check the token's repository access and expiry."
+            exit 1
+          fi
+
+      # A pull_request_review event's review object does not include its
+      # inline comments, so fetch them and add them to the payload as findings.
+      # This step uses the token but runs no checked-out code.
+      - name: Collect inline review comments
+        id: collect
+        env:
+          GH_TOKEN: ${{ secrets.target_repo_token }}
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+          REVIEW_PAYLOAD: ${{ inputs.review_payload }}
+        run: |
+          set -euo pipefail
+          payload_file="${RUNNER_TEMP}/review-payload.json"
+          printf '%s' "${REVIEW_PAYLOAD}" > "${payload_file}"
+          review_id="$(jq -r 'if type == "object" and (has("findings") | not) and (.id | type) == "number" then .id else empty end' "${payload_file}" 2>/dev/null || true)"
+          if [[ -n "${review_id}" ]]; then
+            comments_file="$(mktemp)"
+            gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}/reviews/${review_id}/comments" \
+              --jq '.[] | {path, line: (.line // .original_line // .position), body}' | jq -s '.' > "${comments_file}"
+            echo "Fetched $(jq 'length' "${comments_file}") inline comment(s) for review ${review_id}."
+            jq --slurpfile comments "${comments_file}" \
+              '{findings: ((if ((.body // "") | test("\\S")) then [{path: "review summary", body: .body}] else [] end) + $comments[0])}' \
+              "${payload_file}" > "${payload_file}.tmp"
+            mv "${payload_file}.tmp" "${payload_file}"
+          fi
+          echo "payload_file=${payload_file}" >> "${GITHUB_OUTPUT}"
+
+      # The checked-out script parses untrusted text, so it gets no secrets.
       - name: Parse and sanitize review payload
         id: parse
         env:
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
           TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
           TARGET_SHA: ${{ inputs.target_sha }}
-          REVIEW_PAYLOAD: ${{ inputs.review_payload }}
-        run: node orchestrator/scripts/parse-review.js
-
-      - name: Validate target repository token access
-        env:
-          GH_TOKEN: ${{ secrets.target_repo_token }}
-          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          PAYLOAD_FILE: ${{ steps.collect.outputs.payload_file }}
         run: |
           set -euo pipefail
-          if [[ "${TARGET_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
-            echo "Target repository must match the caller repository" >&2
-            exit 1
-          fi
-          gh api "repos/${TARGET_REPOSITORY}" --jq '.full_name' >/dev/null
+          REVIEW_PAYLOAD="$(cat "${PAYLOAD_FILE}")"
+          export REVIEW_PAYLOAD
+          node orchestrator/scripts/parse-review.js
 
       - name: Create issue in caller repository
+        id: create
         env:
           GH_TOKEN: ${{ secrets.target_repo_token }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
@@ -73,7 +132,28 @@ jobs:
           set -euo pipefail
           body_file="$(mktemp)"
           printf '%s\n' "${ISSUE_BODY}" > "${body_file}"
-          gh issue create \
+          issue_url="$(gh issue create \
             --repo "${TARGET_REPOSITORY}" \
             --title "${ISSUE_TITLE}" \
-            --body-file "${body_file}"
+            --body-file "${body_file}")"
+          echo "issue_url=${issue_url}" >> "${GITHUB_OUTPUT}"
+          echo "Created ${issue_url}" >> "${GITHUB_STEP_SUMMARY}"
+
+      # Copilot cloud agent starts when an issue is assigned to it; mentioning
+      # @copilot in an issue body does not start a session.
+      - name: Assign issue to Copilot
+        id: assign
+        if: inputs.assign_copilot && steps.parse.outputs.actionable_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.target_repo_token }}
+          ISSUE_URL: ${{ steps.create.outputs.issue_url }}
+        run: |
+          set -euo pipefail
+          if ! gh issue edit "${ISSUE_URL}" --add-assignee "@copilot"; then
+            echo "::warning::Created ${ISSUE_URL} but could not assign it to Copilot. target_repo_token must be a user token (not GITHUB_TOKEN or a GitHub App installation token) for a user with Copilot cloud agent access, and Copilot cloud agent must be enabled for the repository. Set assign_copilot: false to skip assignment."
+            echo "copilot_assigned=false" >> "${GITHUB_OUTPUT}"
+            echo "Could not assign ${ISSUE_URL} to Copilot; see the run warnings." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          echo "copilot_assigned=true" >> "${GITHUB_OUTPUT}"
+          echo "Assigned ${ISSUE_URL} to Copilot" >> "${GITHUB_STEP_SUMMARY}"
