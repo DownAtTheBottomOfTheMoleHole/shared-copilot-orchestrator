@@ -22,7 +22,7 @@ fix: reject invalid target repositories
 docs: clarify release pinning
 ```
 
-Use `feat` for compatible features, `fix`, `perf` or `security` for patches, and `!` or a `BREAKING CHANGE:` footer for breaking changes. `docs`, `style`, `test`, `build`, `ci`, `chore`, `refactor` and `revert` commits do not increment the GitVersion release; a `BREAKING CHANGE:` footer on one of these types is also ignored, so use `type!:` or a releasing type for breaking changes. Make each commit atomic: it should contain one focused, independently understandable change. CI can validate commit format, while reviewers assess atomic scope.
+Use `feat` for compatible features, `fix`, `perf` or `security` for patches, and `!` or a `BREAKING CHANGE:` footer for breaking changes. `docs`, `style`, `test`, `build`, `ci`, `chore`, `refactor` and `revert` commits do not increment the GitVersion release unless they carry a `BREAKING CHANGE:` footer, which always produces a major release. Make each commit atomic: it should contain one focused, independently understandable change. CI can validate commit format, while reviewers assess atomic scope.
 
 ## Pull requests and releases
 

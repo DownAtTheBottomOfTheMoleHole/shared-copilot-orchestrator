@@ -36,7 +36,7 @@ Releases are versioned with GitVersion and published automatically when changes 
 | `type!:` or a `BREAKING CHANGE:` footer | major |
 | `feat` | minor |
 | `fix`, `perf`, `security` | patch |
-| `docs`, `style`, `test`, `build`, `ci`, `chore`, `refactor`, `revert` | none |
+| `docs`, `style`, `test`, `build`, `ci`, `chore`, `refactor`, `revert` without a breaking footer | none |
 
 A merge that contains only non-releasing commits does not publish a new release. See [CONTRIBUTING.md](CONTRIBUTING.md#versioning-fallbacks) for the version fallbacks and manual overrides.
 
@@ -69,7 +69,7 @@ jobs:
     # Example filter: only hand off reviews submitted by Copilot. Confirm the
     # reviewer login used in your repository before relying on it.
     if: github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
-    uses: DownAtTheBottomOfTheMoleHole/shared-copilot-orchestrator/.github/workflows/copilot-orchestrator.yml@v1.0.1
+    uses: DownAtTheBottomOfTheMoleHole/shared-copilot-orchestrator/.github/workflows/copilot-orchestrator.yml@v1.1.0
     with:
       target_repository: ${{ github.repository }}
       target_pr_number: ${{ github.event.pull_request.number }}
@@ -87,7 +87,7 @@ jobs:
 | `target_repository` | input, required | `owner/repo` for the issue; must equal the caller repository. |
 | `target_pr_number` | input, required | Pull request number the findings relate to. |
 | `target_sha` | input, required | Commit SHA the findings relate to. |
-| `review_payload` | input, optional | JSON review payload (a review object, a findings array, or `{ "findings": [...] }`). |
+| `review_payload` | input, optional | JSON review payload: a review object (its inline comments are fetched automatically), a findings array, or `{ "findings": [...] }`. |
 | `assign_copilot` | input, optional | Assign the issue to Copilot when there are actionable findings. Defaults to `true`. |
 | `target_repo_token` | secret, required | Token used to create and assign the issue (see below). |
 | `issue_url` | output | URL of the created issue. |
