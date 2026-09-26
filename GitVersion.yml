@@ -6,7 +6,6 @@ major-version-bump-message: '(?is)(^[a-z][a-z0-9-]*(\([^)]+\))?!:|BREAKING CHANG
 minor-version-bump-message: '(?i)^feat(\([^)]+\))?:'
 patch-version-bump-message: '(?i)^(fix|perf)(\([^)]+\))?:'
 no-bump-message: '(?i)^(docs|style|test|build|ci|chore)(\([^)]+\))?:'
-next-version: 'v1.2.16'
 branches:
   main:
     regex: ^main$
