@@ -31,10 +31,11 @@ function validateSha(sha) {
   return sha;
 }
 
-function sanitizeText(input, maxLength = 1000) {
+function sanitizeText(input, maxLength = 1000, options = {}) {
   if (typeof input !== "string") {
     return "";
   }
+  const { neutralizeMentions = false } = options;
 
   const withoutControlChars = input
     .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "")
@@ -44,7 +45,9 @@ function sanitizeText(input, maxLength = 1000) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  const withoutMentions = escapedHtmlChars.replace(/@/g, "@\u200B");
+  const withoutMentions = neutralizeMentions
+    ? escapedHtmlChars.replace(/@/g, "@\u200B")
+    : escapedHtmlChars;
   const escapedMarkdown = withoutMentions.replace(
     /([\\`*_{}\[\]()#+\-.!|>])/g,
     "\\$1",
@@ -62,11 +65,7 @@ function parseReviewPayload(rawPayload) {
   try {
     payload = JSON.parse(rawPayload);
   } catch {
-    return [
-      {
-        body: rawPayload,
-      },
-    ];
+    return [];
   }
 
   if (Array.isArray(payload)) {
@@ -85,16 +84,27 @@ function parseReviewPayload(rawPayload) {
 }
 
 function toFindingLine(finding, index) {
-  const path = sanitizeText(String(finding.path || "unknown"), 200);
-  const line = sanitizeText(String(finding.line || "n/a"), 20);
-  const severity = sanitizeText(String(finding.severity || "unspecified"), 20);
-  const body = sanitizeText(String(finding.body || finding.comment || ""), 700);
+  const path = sanitizeText(String(finding.path || "unknown"), 200, {
+    neutralizeMentions: true,
+  });
+  const line = sanitizeText(String(finding.line || "n/a"), 20, {
+    neutralizeMentions: true,
+  });
+  const severity = sanitizeText(String(finding.severity || "unspecified"), 20, {
+    neutralizeMentions: true,
+  });
+  const body = sanitizeText(String(finding.body || finding.comment || ""), 700, {
+    neutralizeMentions: true,
+  });
 
   if (!body) {
-    return `${index + 1}. **${severity}** (${path}:${line}) - No details provided.`;
+    return null;
   }
 
-  return `${index + 1}. **${severity}** (${path}:${line}) - ${body}`;
+  return {
+    actionable: true,
+    text: `${index + 1}. **${severity}** (${path}:${line}) - ${body}`,
+  };
 }
 
 function writeOutput(name, value) {
@@ -114,15 +124,19 @@ function main() {
   const targetSha = validateSha(getRequiredEnv("TARGET_SHA"));
   const findings = parseReviewPayload(process.env.REVIEW_PAYLOAD || "");
 
+  const renderedFindings = findings
+    .slice(0, 50)
+    .map((finding, index) => toFindingLine(finding || {}, index))
+    .filter(Boolean);
+  const actionableFindings = renderedFindings.filter(
+    (finding) => finding.actionable,
+  );
   const findingLines =
-    findings.length > 0
-      ? findings
-          .slice(0, 50)
-          .map((finding, index) => toFindingLine(finding || {}, index))
-          .join("\n")
+    renderedFindings.length > 0
+      ? renderedFindings.map((finding) => finding.text).join("\n")
       : "No structured findings were provided in the payload.";
   const handoffLine =
-    findings.length > 0
+    actionableFindings.length > 0
       ? "@copilot please propose and implement a fix for the findings above."
       : "No actionable findings were parsed. Verify caller payload mapping before requesting an automated fix.";
 
