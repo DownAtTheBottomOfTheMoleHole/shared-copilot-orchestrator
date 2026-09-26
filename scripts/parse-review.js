@@ -1,0 +1,145 @@
+#!/usr/bin/env node
+
+const fs = require("node:fs");
+
+function getRequiredEnv(name) {
+  const value = process.env[name];
+  if (!value || !value.trim()) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value.trim();
+}
+
+function validateRepository(repository) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+    throw new Error("TARGET_REPOSITORY must match owner/repo format");
+  }
+  return repository;
+}
+
+function validatePrNumber(prNumber) {
+  if (!/^[1-9]\d*$/.test(prNumber)) {
+    throw new Error("TARGET_PR_NUMBER must be a positive integer");
+  }
+  return prNumber;
+}
+
+function validateSha(sha) {
+  if (!/^[0-9a-fA-F]{7,40}$/.test(sha)) {
+    throw new Error("TARGET_SHA must be a valid git SHA");
+  }
+  return sha;
+}
+
+function sanitizeText(input, maxLength = 1000) {
+  if (typeof input !== "string") {
+    return "";
+  }
+
+  const withoutControlChars = input
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "")
+    .replace(/\r\n?/g, "\n");
+
+  const withoutHtml = withoutControlChars.replace(/<[^>]*>/g, "");
+  const withoutMentions = withoutHtml.replace(/@/g, "@\u200B");
+  const escapedMarkdown = withoutMentions.replace(
+    /([\\`*_{}\[\]()#+\-.!|>])/g,
+    "\\$1",
+  );
+
+  return escapedMarkdown.trim().slice(0, maxLength);
+}
+
+function parseReviewPayload(rawPayload) {
+  if (!rawPayload || !rawPayload.trim()) {
+    return [];
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(rawPayload);
+  } catch {
+    return [
+      {
+        body: rawPayload,
+      },
+    ];
+  }
+
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  if (Array.isArray(payload.findings)) {
+    return payload.findings;
+  }
+
+  if (typeof payload.body === "string") {
+    return [payload];
+  }
+
+  return [];
+}
+
+function toFindingLine(finding, index) {
+  const path = sanitizeText(String(finding.path || "unknown"), 200);
+  const line = sanitizeText(String(finding.line || "n/a"), 20);
+  const severity = sanitizeText(String(finding.severity || "unspecified"), 20);
+  const body = sanitizeText(String(finding.body || finding.comment || ""), 700);
+
+  if (!body) {
+    return `${index + 1}. **${severity}** (${path}:${line}) - No details provided.`;
+  }
+
+  return `${index + 1}. **${severity}** (${path}:${line}) - ${body}`;
+}
+
+function writeOutput(name, value) {
+  const outputPath = process.env.GITHUB_OUTPUT;
+  if (!outputPath) {
+    throw new Error("GITHUB_OUTPUT is not set");
+  }
+  const delimiter = `EOF_${name.toUpperCase()}_${Date.now()}`;
+  fs.appendFileSync(outputPath, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
+}
+
+function main() {
+  const targetRepository = validateRepository(
+    getRequiredEnv("TARGET_REPOSITORY"),
+  );
+  const targetPrNumber = validatePrNumber(getRequiredEnv("TARGET_PR_NUMBER"));
+  const targetSha = validateSha(getRequiredEnv("TARGET_SHA"));
+  const findings = parseReviewPayload(process.env.REVIEW_PAYLOAD || "");
+
+  const findingLines =
+    findings.length > 0
+      ? findings
+          .slice(0, 50)
+          .map((finding, index) => toFindingLine(finding || {}, index))
+          .join("\n")
+      : "No structured findings were provided in the payload.";
+
+  const issueTitle = `Copilot review findings for PR #${targetPrNumber}`;
+  const issueBody = [
+    "## Copilot Review Findings",
+    "",
+    `Repository: \`${sanitizeText(targetRepository, 120)}\``,
+    `PR: #${sanitizeText(targetPrNumber, 20)}`,
+    `Commit: \`${sanitizeText(targetSha, 40)}\``,
+    "",
+    "### Findings",
+    findingLines,
+    "",
+    "@copilot please propose and implement a fix for the findings above.",
+  ].join("\n");
+
+  writeOutput("issue_title", issueTitle);
+  writeOutput("issue_body", issueBody);
+}
+
+try {
+  main();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}

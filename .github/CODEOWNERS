@@ -1,0 +1,2 @@
+# Enforce maintainer approval for all workflow changes.
+/.github/workflows/* @DownAtTheBottomOfTheMoleHole/main-maintainers
