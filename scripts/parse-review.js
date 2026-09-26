@@ -40,8 +40,11 @@ function sanitizeText(input, maxLength = 1000) {
     .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, "")
     .replace(/\r\n?/g, "\n");
 
-  const withoutHtml = withoutControlChars.replace(/<[^>]*>/g, "");
-  const withoutMentions = withoutHtml.replace(/@/g, "@\u200B");
+  const escapedHtmlChars = withoutControlChars
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const withoutMentions = escapedHtmlChars.replace(/@/g, "@\u200B");
   const escapedMarkdown = withoutMentions.replace(
     /([\\`*_{}\[\]()#+\-.!|>])/g,
     "\\$1",

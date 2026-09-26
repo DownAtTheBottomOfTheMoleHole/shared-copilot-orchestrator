@@ -40,6 +40,9 @@ jobs:
       target_repository: ${{ github.repository }}
       target_pr_number: ${{ github.event.pull_request.number }}
       target_sha: ${{ github.sha }}
+      review_payload: ${{ toJson(github.event.review) }}
+    secrets:
+      target_repo_token: ${{ secrets.COPILOT_ORCHESTRATOR_TOKEN }}
 ```
 
 ## Security posture
