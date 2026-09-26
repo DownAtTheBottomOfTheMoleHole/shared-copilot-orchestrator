@@ -50,16 +50,15 @@ test("validates the commit range and rejects a non-conventional commit", () => {
     git(repositoryPath, "init", "-q", "-b", "main");
     git(repositoryPath, "config", "user.name", "Test");
     git(repositoryPath, "config", "user.email", "test@example.invalid");
-    git(repositoryPath, "commit", "--allow-empty", "-qm", "docs: baseline");
+    const trackedFilePath = path.join(repositoryPath, "subject.txt");
+    fs.writeFileSync(trackedFilePath, "baseline\n");
+    git(repositoryPath, "add", "subject.txt");
+    git(repositoryPath, "commit", "-qm", "docs: baseline");
     const baseSha = git(repositoryPath, "rev-parse", "HEAD");
 
-    git(
-      repositoryPath,
-      "commit",
-      "--allow-empty",
-      "-qm",
-      "feat(parser): add commit validation",
-    );
+    fs.appendFileSync(trackedFilePath, "conventional change\n");
+    git(repositoryPath, "add", "subject.txt");
+    git(repositoryPath, "commit", "-qm", "feat(parser): add commit validation");
     let headSha = git(repositoryPath, "rev-parse", "HEAD");
     let result = spawnSync(
       process.execPath,
@@ -68,7 +67,18 @@ test("validates the commit range and rejects a non-conventional commit", () => {
     );
     assert.equal(result.status, 0, result.stderr);
 
-    git(repositoryPath, "commit", "--allow-empty", "-qm", "not conventional");
+    git(repositoryPath, "commit", "--allow-empty", "-qm", "Initial plan");
+    headSha = git(repositoryPath, "rev-parse", "HEAD");
+    result = spawnSync(
+      process.execPath,
+      [checkCommitsPath, baseSha, headSha],
+      { cwd: repositoryPath, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+
+    fs.appendFileSync(trackedFilePath, "non conventional change\n");
+    git(repositoryPath, "add", "subject.txt");
+    git(repositoryPath, "commit", "-qm", "not conventional");
     headSha = git(repositoryPath, "rev-parse", "HEAD");
     result = spawnSync(
       process.execPath,

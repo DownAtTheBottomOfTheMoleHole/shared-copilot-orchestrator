@@ -9,6 +9,16 @@ function isConventionalCommit(subject) {
   return CONVENTIONAL_COMMIT.test(subject);
 }
 
+function isEmptyCommit(sha) {
+  return execFileSync(
+    "git",
+    ["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
+    { encoding: "utf8" },
+  )
+    .trim()
+    .length === 0;
+}
+
 function main() {
   const [baseSha, headSha] = process.argv.slice(2);
   if (
@@ -22,14 +32,22 @@ function main() {
 
   const subjects = execFileSync(
     "git",
-    ["log", "--format=%s", "--no-merges", `${baseSha}..${headSha}`],
+    ["log", "--format=%H%x00%s", "--no-merges", `${baseSha}..${headSha}`],
     { encoding: "utf8" },
   )
     .split("\n")
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((line) => {
+      const [sha, subject] = line.split("\u0000");
+      return { sha, subject };
+    })
+    .filter(({ sha }) => !isEmptyCommit(sha))
+    .map(({ subject }) => subject);
 
   if (subjects.length === 0) {
-    throw new Error("No non-merge commits found in the pull request.");
+    throw new Error(
+      "No non-merge commits with file changes found in the pull request.",
+    );
   }
 
   const invalidSubjects = subjects.filter(
