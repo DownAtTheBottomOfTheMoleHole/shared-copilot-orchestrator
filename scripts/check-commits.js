@@ -2,8 +2,26 @@
 
 const { execFileSync } = require("node:child_process");
 
-const CONVENTIONAL_COMMIT =
-  /^[a-z][a-z0-9-]*(?:\([^)]+\))?!?: \S.*$/;
+// Keep aligned with the org commitlint type-enum and the GitVersion.yml bump
+// messages; an unknown type such as "feet:" would pass a generic pattern but
+// never increment the release version.
+const COMMIT_TYPES = [
+  "feat",
+  "fix",
+  "perf",
+  "security",
+  "docs",
+  "style",
+  "refactor",
+  "test",
+  "build",
+  "ci",
+  "chore",
+  "revert",
+];
+const CONVENTIONAL_COMMIT = new RegExp(
+  `^(?:${COMMIT_TYPES.join("|")})(?:\\([^)]+\\))?!?: \\S.*$`,
+);
 const ALLOWED_NON_CONVENTIONAL_SUBJECTS = new Set(["Initial plan"]);
 
 function isConventionalCommit(subject) {
@@ -65,9 +83,9 @@ function main() {
   );
   if (invalidSubjects.length > 0) {
     throw new Error(
-      `Use Conventional Commit subjects for every commit:\n${invalidSubjects
-        .map((subject) => `- ${subject}`)
-        .join("\n")}`,
+      `Use Conventional Commit subjects for every commit (allowed types: ${COMMIT_TYPES.join(
+        ", ",
+      )}):\n${invalidSubjects.map((subject) => `- ${subject}`).join("\n")}`,
     );
   }
 
