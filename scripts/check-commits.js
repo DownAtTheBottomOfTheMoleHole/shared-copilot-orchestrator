@@ -32,7 +32,7 @@ function main() {
     { encoding: "utf8" },
   )
     .split("\u001e")
-    .map((entry) => entry.trim())
+    .map((entry) => entry.replace(/^\n+/, ""))
     .filter(Boolean)
     .map((entry) => {
       const [header, ...fileLines] = entry.split("\n");
