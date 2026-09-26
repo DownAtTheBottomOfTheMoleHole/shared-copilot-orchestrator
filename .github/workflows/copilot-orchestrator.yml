@@ -81,18 +81,18 @@ jobs:
           fi
 
       # A pull_request_review event's review object does not include its
-      # inline comments, so fetch them and pass them to the parser as findings.
-      - name: Parse and sanitize review payload
-        id: parse
+      # inline comments, so fetch them and add them to the payload as findings.
+      # This step uses the token but runs no checked-out code.
+      - name: Collect inline review comments
+        id: collect
         env:
           GH_TOKEN: ${{ secrets.target_repo_token }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
           TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
-          TARGET_SHA: ${{ inputs.target_sha }}
           REVIEW_PAYLOAD: ${{ inputs.review_payload }}
         run: |
           set -euo pipefail
-          payload_file="$(mktemp)"
+          payload_file="${RUNNER_TEMP}/review-payload.json"
           printf '%s' "${REVIEW_PAYLOAD}" > "${payload_file}"
           review_id="$(jq -r 'if type == "object" and (has("findings") | not) and (.id | type) == "number" then .id else empty end' "${payload_file}" 2>/dev/null || true)"
           if [[ -n "${review_id}" ]]; then
@@ -100,11 +100,25 @@ jobs:
             gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}/reviews/${review_id}/comments" \
               --jq '.[] | {path, line: (.line // .original_line // .position), body}' | jq -s '.' > "${comments_file}"
             echo "Fetched $(jq 'length' "${comments_file}") inline comment(s) for review ${review_id}."
-            REVIEW_PAYLOAD="$(jq --slurpfile comments "${comments_file}" \
+            jq --slurpfile comments "${comments_file}" \
               '{findings: ((if ((.body // "") | test("\\S")) then [{path: "review summary", body: .body}] else [] end) + $comments[0])}' \
-              "${payload_file}")"
-            export REVIEW_PAYLOAD
+              "${payload_file}" > "${payload_file}.tmp"
+            mv "${payload_file}.tmp" "${payload_file}"
           fi
+          echo "payload_file=${payload_file}" >> "${GITHUB_OUTPUT}"
+
+      # The checked-out script parses untrusted text, so it gets no secrets.
+      - name: Parse and sanitize review payload
+        id: parse
+        env:
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          PAYLOAD_FILE: ${{ steps.collect.outputs.payload_file }}
+        run: |
+          set -euo pipefail
+          REVIEW_PAYLOAD="$(cat "${PAYLOAD_FILE}")"
+          export REVIEW_PAYLOAD
           node orchestrator/scripts/parse-review.js
 
       - name: Create issue in caller repository
