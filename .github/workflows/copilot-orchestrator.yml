@@ -49,6 +49,14 @@ jobs:
           REVIEW_PAYLOAD: ${{ inputs.review_payload }}
         run: node orchestrator/scripts/parse-review.js
 
+      - name: Validate target repository token access
+        env:
+          GH_TOKEN: ${{ secrets.target_repo_token }}
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${TARGET_REPOSITORY}" --jq '.full_name' >/dev/null
+
       - name: Create issue in caller repository
         env:
           GH_TOKEN: ${{ secrets.target_repo_token }}

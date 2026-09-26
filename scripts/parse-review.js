@@ -121,6 +121,10 @@ function main() {
           .map((finding, index) => toFindingLine(finding || {}, index))
           .join("\n")
       : "No structured findings were provided in the payload.";
+  const handoffLine =
+    findings.length > 0
+      ? "@copilot please propose and implement a fix for the findings above."
+      : "No actionable findings were parsed. Verify caller payload mapping before requesting an automated fix.";
 
   const issueTitle = `Copilot review findings for PR #${targetPrNumber}`;
   const issueBody = [
@@ -133,7 +137,7 @@ function main() {
     "### Findings",
     findingLines,
     "",
-    "@copilot please propose and implement a fix for the findings above.",
+    handoffLine,
   ].join("\n");
 
   writeOutput("issue_title", issueTitle);
