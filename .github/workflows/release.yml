@@ -32,21 +32,22 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          import re
           from pathlib import Path
+          import yaml
 
-          source = Path("GitVersion.yml").read_text(encoding="utf-8")
-          source = re.sub(
-              r"(?m)^mode:\s*Main[Ll]ine\s*$",
-              "mode: ContinuousDelivery",
-              source,
-              count=1,
-          )
-          source = re.sub(r"(?m)^[ \t]+mode:\s*Main[Ll]ine\s*\r?\n", "", source)
-          source = re.sub(r"(?m)^[ \t]+is-mainline:\s*(?:true|false)\s*\r?\n", "", source)
+          config = yaml.safe_load(Path("GitVersion.yml").read_text(encoding="utf-8"))
+
+          if isinstance(config, dict) and str(config.get("mode")) in {"MainLine", "Mainline"}:
+              config["mode"] = "ContinuousDelivery"
+
+          branches = config.get("branches") if isinstance(config, dict) else None
+          main_branch = branches.get("main") if isinstance(branches, dict) else None
+          if isinstance(main_branch, dict):
+              main_branch.pop("mode", None)
+              main_branch.pop("is-mainline", None)
 
           output = Path(os.environ["RUNNER_TEMP"]) / "GitVersion.release.yml"
-          output.write_text(source, encoding="utf-8")
+          output.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
           print(f"Wrote {output}")
           PY
 
