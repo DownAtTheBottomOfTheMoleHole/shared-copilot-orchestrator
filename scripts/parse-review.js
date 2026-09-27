@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require("node:fs");
-const { randomUUID } = require("node:crypto");
+const { createHash, randomUUID } = require("node:crypto");
 
 function getRequiredEnv(name) {
   const value = process.env[name];
@@ -108,6 +108,7 @@ function toFindingLine(finding, index) {
 
   return {
     actionable: true,
+    fingerprintText: `${severity}\n${path}\n${line}\n${body}`,
     text: `${index + 1}. **${severity}** (${path}:${line}) - ${body}`,
   };
 }
@@ -139,6 +140,19 @@ function main() {
   const actionableFindings = renderedFindings.filter(
     (finding) => finding.actionable,
   );
+  // Sort only for the fingerprint; keep the original order for issue display.
+  const issueMarker = `Review fingerprint: ${createHash("sha256")
+    .update(
+      JSON.stringify({
+        targetRepository,
+        targetPrNumber,
+        targetSha,
+        findings: renderedFindings
+          .map((finding) => finding.fingerprintText)
+          .sort(),
+      }),
+    )
+    .digest("hex")}`;
   const findingLines =
     renderedFindings.length > 0
       ? renderedFindings.map((finding) => finding.text).join("\n")
@@ -162,11 +176,14 @@ function main() {
     findingLines,
     "",
     handoffLine,
+    "",
+    issueMarker,
   ].join("\n");
 
   writeOutput("issue_title", issueTitle);
   writeOutput("issue_body", issueBody);
   writeOutput("actionable_count", String(actionableFindings.length));
+  writeOutput("issue_marker", issueMarker);
 }
 
 try {

@@ -44,6 +44,11 @@ jobs:
   create-copilot-issue:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      # Only retries of this run share a group. Distinct reviews must not
+      # replace one another while pending in GitHub's concurrency queue.
+      group: copilot-orchestrator-${{ github.run_id }}
+      cancel-in-progress: false
     permissions:
       contents: read
     outputs:
@@ -81,7 +86,8 @@ jobs:
           fi
 
       # A pull_request_review event's review object does not include its
-      # inline comments, so fetch them and add them to the payload as findings.
+      # inline comments. The review body is an overview, not an actionable
+      # finding, so only pass inline comments to the parser.
       # This step uses the token but runs no checked-out code.
       - name: Collect inline review comments
         id: collect
@@ -101,7 +107,7 @@ jobs:
               --jq '.[] | {path, line: (.line // .original_line // .position), body}' | jq -s '.' > "${comments_file}"
             echo "Fetched $(jq 'length' "${comments_file}") inline comment(s) for review ${review_id}."
             jq --slurpfile comments "${comments_file}" \
-              '{findings: ((if ((.body // "") | test("\\S")) then [{path: "review summary", body: .body}] else [] end) + $comments[0])}' \
+              '{findings: $comments[0]}' \
               "${payload_file}" > "${payload_file}.tmp"
             mv "${payload_file}.tmp" "${payload_file}"
           fi
@@ -123,13 +129,32 @@ jobs:
 
       - name: Create issue in caller repository
         id: create
+        if: steps.parse.outputs.actionable_count != '0'
         env:
           GH_TOKEN: ${{ secrets.target_repo_token }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
           ISSUE_TITLE: ${{ steps.parse.outputs.issue_title }}
           ISSUE_BODY: ${{ steps.parse.outputs.issue_body }}
+          ISSUE_MARKER: ${{ steps.parse.outputs.issue_marker }}
         run: |
           set -euo pipefail
+          # Read recent issues directly so an immediate retry sees an issue
+          # even before GitHub's search index catches up.
+          existing_issue="$(gh api "repos/${TARGET_REPOSITORY}/issues?state=all&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | select((.body // "") | contains(env.ISSUE_MARKER)) | .html_url' \
+            | sed -n '1p')"
+          if [[ -z "${existing_issue}" ]]; then
+            fingerprint="${ISSUE_MARKER##* }"
+            existing_issue="$(gh api -X GET search/issues \
+              -f q="${fingerprint} repo:${TARGET_REPOSITORY} in:body" -f per_page=100 \
+              --jq '.items[] | select(.pull_request == null) | select((.body // "") | contains(env.ISSUE_MARKER)) | .html_url' \
+              | sed -n '1p')"
+          fi
+          if [[ -n "${existing_issue}" ]]; then
+            echo "issue_url=${existing_issue}" >> "${GITHUB_OUTPUT}"
+            echo "Reused existing issue ${existing_issue}" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
           body_file="$(mktemp)"
           printf '%s\n' "${ISSUE_BODY}" > "${body_file}"
           issue_url="$(gh issue create \
@@ -143,12 +168,31 @@ jobs:
       # @copilot in an issue body does not start a session.
       - name: Assign issue to Copilot
         id: assign
-        if: inputs.assign_copilot && steps.parse.outputs.actionable_count != '0'
+        if: inputs.assign_copilot && steps.create.outputs.issue_url != ''
         env:
           GH_TOKEN: ${{ secrets.target_repo_token }}
           ISSUE_URL: ${{ steps.create.outputs.issue_url }}
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
         run: |
           set -euo pipefail
+          issue_number="${ISSUE_URL##*/}"
+          if [[ ! "${issue_number}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Created or reused issue URL has no valid issue number."
+            exit 1
+          fi
+          issue_details="$(gh api "repos/${TARGET_REPOSITORY}/issues/${issue_number}" \
+            --jq '{state, copilot_assignee: ([.assignees[].login] | any(. == "Copilot"))}')"
+          copilot_assignee="$(jq -r '.copilot_assignee' <<< "${issue_details}")"
+          if [[ "${copilot_assignee}" == 'true' ]]; then
+            echo "copilot_assigned=true" >> "${GITHUB_OUTPUT}"
+            echo "Copilot is already assigned to ${ISSUE_URL}" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          if [[ "$(jq -r '.state' <<< "${issue_details}")" != 'open' ]]; then
+            echo "copilot_assigned=false" >> "${GITHUB_OUTPUT}"
+            echo "Issue ${ISSUE_URL} is not open; leaving it unassigned." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
           if ! gh issue edit "${ISSUE_URL}" --add-assignee "@copilot"; then
             echo "::warning::Created ${ISSUE_URL} but could not assign it to Copilot. target_repo_token must be a user token (not GITHUB_TOKEN or a GitHub App installation token) for a user with Copilot cloud agent access, and Copilot cloud agent must be enabled for the repository. Set assign_copilot: false to skip assignment."
             echo "copilot_assigned=false" >> "${GITHUB_OUTPUT}"
