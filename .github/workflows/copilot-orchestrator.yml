@@ -57,10 +57,11 @@ jobs:
       contents: read
     outputs:
       issue_url: ${{ steps.create.outputs.issue_url }}
-      actionable_count: ${{ steps.parse.outputs.actionable_count }}
+      actionable_count: ${{ steps.parse.outputs.actionable_count || '0' }}
       copilot_assigned: ${{ steps.assign.outputs.copilot_assigned || 'false' }}
     steps:
-      - name: Require trusted handoff context and environment token
+      - name: Require trusted handoff context and check environment token
+        id: token
         env:
           ORCHESTRATOR_TOKEN: ${{ secrets.COPILOT_ORCHESTRATOR_ENV_TOKEN }}
         run: |
@@ -70,11 +71,14 @@ jobs:
             exit 1
           fi
           if [[ -z "${ORCHESTRATOR_TOKEN}" ]]; then
-            echo '::error::Set COPILOT_ORCHESTRATOR_ENV_TOKEN in the caller repository copilot-orchestrator environment.'
-            exit 1
+            echo 'available=false' >> "${GITHUB_OUTPUT}"
+            echo 'Copilot handoff skipped: COPILOT_ORCHESTRATOR_ENV_TOKEN is not configured in the caller repository copilot-orchestrator environment.' >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
           fi
+          echo 'available=true' >> "${GITHUB_OUTPUT}"
 
       - name: Check out orchestrator scripts at the called workflow version
+        if: steps.token.outputs.available == 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ job.workflow_repository }}
@@ -84,6 +88,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate target repository token access
+        if: steps.token.outputs.available == 'true'
         env:
           GH_TOKEN: ${{ secrets.COPILOT_ORCHESTRATOR_ENV_TOKEN }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
@@ -108,6 +113,7 @@ jobs:
       # finding, so only pass inline comments to the parser.
       # This step uses the token but runs no checked-out code.
       - name: Collect inline review comments
+        if: steps.token.outputs.available == 'true'
         id: collect
         env:
           GH_TOKEN: ${{ secrets.COPILOT_ORCHESTRATOR_ENV_TOKEN }}
@@ -133,6 +139,7 @@ jobs:
 
       # The checked-out script parses untrusted text, so it gets no secrets.
       - name: Parse and sanitize review payload
+        if: steps.token.outputs.available == 'true'
         id: parse
         env:
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
@@ -147,7 +154,7 @@ jobs:
 
       - name: Create issue in caller repository
         id: create
-        if: steps.parse.outputs.actionable_count != '0'
+        if: steps.token.outputs.available == 'true' && steps.parse.outputs.actionable_count != '0'
         env:
           GH_TOKEN: ${{ secrets.COPILOT_ORCHESTRATOR_ENV_TOKEN }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
@@ -186,7 +193,7 @@ jobs:
       # @copilot in an issue body does not start a session.
       - name: Assign issue to Copilot
         id: assign
-        if: inputs.assign_copilot && steps.create.outputs.issue_url != ''
+        if: steps.token.outputs.available == 'true' && inputs.assign_copilot && steps.create.outputs.issue_url != ''
         env:
           GH_TOKEN: ${{ secrets.COPILOT_ORCHESTRATOR_ENV_TOKEN }}
           ISSUE_URL: ${{ steps.create.outputs.issue_url }}

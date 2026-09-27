@@ -97,7 +97,7 @@ Copilot cloud agent starts work when an issue is assigned to it; mentioning `@co
 - Use a fine-grained personal access token scoped to the caller repository with read and write access to **actions**, **contents**, **issues** and **pull requests** (or a classic token with `repo`).
 - The token owner must have a Copilot plan with Copilot cloud agent access, and Copilot cloud agent must be enabled for the repository.
 - Store it only as `COPILOT_ORCHESTRATOR_ENV_TOKEN` in the caller repository's `copilot-orchestrator` environment, restricted to `main`. Do not keep a repository or organisation copy.
-- The trusted dispatcher rejects fork and Dependabot PRs before calling the reusable workflow. The shared job also refuses calls outside `workflow_run` on `main` and fails if the environment token is absent.
+- The trusted dispatcher rejects fork and Dependabot PRs before calling the reusable workflow. The shared job also refuses calls outside `workflow_run` on `main`. If the environment token is absent, it succeeds with a skipped summary and creates no issue.
 
 If assignment fails, the issue is still created, the run reports a warning and `copilot_assigned` is `'false'`. If you only need issues, set `assign_copilot: false`; the token then needs **issues: write**, **pull requests: read** and **metadata: read**.
 
