@@ -1,0 +1,212 @@
+name: Copilot review handoff
+description: Turn validated Copilot review comments into an issue and optional Copilot assignment.
+
+inputs:
+  target_repository:
+    description: Caller repository in owner/repo form
+    required: true
+  target_pr_number:
+    description: Pull request number in the caller repository
+    required: true
+  target_sha:
+    description: Reviewed commit SHA associated with the findings
+    required: true
+  review_payload:
+    description: JSON review payload; use a validated review ID for pull request reviews
+    required: false
+    default: ''
+  assign_copilot:
+    description: Assign an actionable issue to Copilot
+    required: false
+    default: 'true'
+  target_repo_token:
+    description: Caller environment token; leave empty to skip the handoff
+    required: false
+
+outputs:
+  issue_url:
+    description: URL of the created or reused issue
+    value: ${{ steps.create.outputs.issue_url }}
+  actionable_count:
+    description: Number of actionable findings parsed
+    value: ${{ steps.parse.outputs.actionable_count || '0' }}
+  copilot_assigned:
+    description: Whether Copilot was assigned
+    value: ${{ steps.assign.outputs.copilot_assigned || 'false' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Require trusted handoff context and check environment token
+      id: token
+      env:
+        ORCHESTRATOR_TOKEN: ${{ inputs.target_repo_token }}
+        TARGET_REPOSITORY: ${{ inputs.target_repository }}
+        TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${GITHUB_EVENT_NAME}" != 'workflow_run' || "${GITHUB_REF}" != 'refs/heads/main' ]]; then
+          echo '::error::The orchestrator must be called from a workflow_run on main.'
+          exit 1
+        fi
+        if [[ "${TARGET_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
+          echo '::error::target_repository must match the caller repository.'
+          exit 1
+        fi
+        if [[ ! "${TARGET_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+          echo '::error::target_pr_number must be a positive integer.'
+          exit 1
+        fi
+        if [[ -z "${ORCHESTRATOR_TOKEN}" ]]; then
+          echo 'available=false' >> "${GITHUB_OUTPUT}"
+          echo 'Copilot handoff skipped: COPILOT_ORCHESTRATOR_ENV_TOKEN is not configured in the caller repository copilot-orchestrator environment.' >> "${GITHUB_STEP_SUMMARY}"
+          exit 0
+        fi
+        echo 'available=true' >> "${GITHUB_OUTPUT}"
+
+    - name: Validate target repository token access
+      if: steps.token.outputs.available == 'true'
+      env:
+        GH_TOKEN: ${{ inputs.target_repo_token }}
+        TARGET_REPOSITORY: ${{ inputs.target_repository }}
+        TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${TARGET_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
+          echo "::error::target_repository (${TARGET_REPOSITORY}) must match the caller repository (${GITHUB_REPOSITORY})."
+          exit 1
+        fi
+        if [[ ! "${TARGET_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::target_pr_number must be a positive integer."
+          exit 1
+        fi
+        if ! gh api "repos/${TARGET_REPOSITORY}" --jq '.full_name' >/dev/null; then
+          echo "::error::COPILOT_ORCHESTRATOR_ENV_TOKEN cannot read ${TARGET_REPOSITORY}. Check the token's repository access and expiry."
+          exit 1
+        fi
+
+    # A pull_request_review event's review object does not include its
+    # inline comments. The review body is an overview, not an actionable
+    # finding, so only pass inline comments to the parser.
+    # This step uses the token but runs no checked-out code.
+    - name: Collect inline review comments
+      if: steps.token.outputs.available == 'true'
+      id: collect
+      env:
+        GH_TOKEN: ${{ inputs.target_repo_token }}
+        TARGET_REPOSITORY: ${{ inputs.target_repository }}
+        TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+        REVIEW_PAYLOAD: ${{ inputs.review_payload }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        payload_file="${RUNNER_TEMP}/review-payload.json"
+        printf '%s' "${REVIEW_PAYLOAD}" > "${payload_file}"
+        review_id="$(jq -r 'if type == "object" and (has("findings") | not) and (.id | type) == "number" then .id else empty end' "${payload_file}" 2>/dev/null || true)"
+        if [[ -n "${review_id}" ]]; then
+          comments_file="$(mktemp)"
+          gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}/reviews/${review_id}/comments" \
+            --jq '.[] | {path, line: (.line // .original_line // .position), body}' | jq -s '.' > "${comments_file}"
+          echo "Fetched $(jq 'length' "${comments_file}") inline comment(s) for review ${review_id}."
+          jq --slurpfile comments "${comments_file}" \
+            '{findings: $comments[0]}' \
+            "${payload_file}" > "${payload_file}.tmp"
+          mv "${payload_file}.tmp" "${payload_file}"
+        fi
+        echo "payload_file=${payload_file}" >> "${GITHUB_OUTPUT}"
+
+    # The parser comes from this pinned action and gets no token in its step environment.
+    - name: Parse and sanitize review payload
+      if: steps.token.outputs.available == 'true'
+      id: parse
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        TARGET_REPOSITORY: ${{ inputs.target_repository }}
+        TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+        TARGET_SHA: ${{ inputs.target_sha }}
+        PAYLOAD_FILE: ${{ steps.collect.outputs.payload_file }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        REVIEW_PAYLOAD="$(cat "${PAYLOAD_FILE}")"
+        export REVIEW_PAYLOAD
+        node "${ACTION_PATH}/scripts/parse-review.js"
+
+    - name: Create issue in caller repository
+      id: create
+      if: steps.token.outputs.available == 'true' && steps.parse.outputs.actionable_count != '0'
+      env:
+        GH_TOKEN: ${{ inputs.target_repo_token }}
+        TARGET_REPOSITORY: ${{ inputs.target_repository }}
+        ISSUE_TITLE: ${{ steps.parse.outputs.issue_title }}
+        ISSUE_BODY: ${{ steps.parse.outputs.issue_body }}
+        ISSUE_MARKER: ${{ steps.parse.outputs.issue_marker }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Read recent issues directly so an immediate retry sees an issue
+        # even before GitHub's search index catches up.
+        existing_issue="$(gh api "repos/${TARGET_REPOSITORY}/issues?state=all&per_page=100" \
+          --jq '.[] | select(.pull_request == null) | select((.body // "") | contains(env.ISSUE_MARKER)) | .html_url' \
+          | sed -n '1p')"
+        if [[ -z "${existing_issue}" ]]; then
+          fingerprint="${ISSUE_MARKER##* }"
+          existing_issue="$(gh api -X GET search/issues \
+            -f q="${fingerprint} repo:${TARGET_REPOSITORY} in:body" -f per_page=100 \
+            --jq '.items[] | select(.pull_request == null) | select((.body // "") | contains(env.ISSUE_MARKER)) | .html_url' \
+            | sed -n '1p')"
+        fi
+        if [[ -n "${existing_issue}" ]]; then
+          echo "issue_url=${existing_issue}" >> "${GITHUB_OUTPUT}"
+          echo "Reused existing issue ${existing_issue}" >> "${GITHUB_STEP_SUMMARY}"
+          exit 0
+        fi
+        body_file="$(mktemp)"
+        printf '%s\n' "${ISSUE_BODY}" > "${body_file}"
+        issue_url="$(gh issue create \
+          --repo "${TARGET_REPOSITORY}" \
+          --title "${ISSUE_TITLE}" \
+          --body-file "${body_file}")"
+        echo "issue_url=${issue_url}" >> "${GITHUB_OUTPUT}"
+        echo "Created ${issue_url}" >> "${GITHUB_STEP_SUMMARY}"
+
+    # Copilot cloud agent starts when an issue is assigned to it; mentioning
+    # @copilot in an issue body does not start a session.
+    - name: Assign issue to Copilot
+      id: assign
+      if: steps.token.outputs.available == 'true' && inputs.assign_copilot == 'true' && steps.create.outputs.issue_url != ''
+      env:
+        GH_TOKEN: ${{ inputs.target_repo_token }}
+        ISSUE_URL: ${{ steps.create.outputs.issue_url }}
+        TARGET_REPOSITORY: ${{ inputs.target_repository }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        issue_number="${ISSUE_URL##*/}"
+        if [[ ! "${issue_number}" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::Created or reused issue URL has no valid issue number."
+          exit 1
+        fi
+        issue_details="$(gh api "repos/${TARGET_REPOSITORY}/issues/${issue_number}" \
+          --jq '{state, copilot_assignee: ([.assignees[].login] | any(. == "Copilot"))}')"
+        copilot_assignee="$(jq -r '.copilot_assignee' <<< "${issue_details}")"
+        if [[ "${copilot_assignee}" == 'true' ]]; then
+          echo "copilot_assigned=true" >> "${GITHUB_OUTPUT}"
+          echo "Copilot is already assigned to ${ISSUE_URL}" >> "${GITHUB_STEP_SUMMARY}"
+          exit 0
+        fi
+        if [[ "$(jq -r '.state' <<< "${issue_details}")" != 'open' ]]; then
+          echo "copilot_assigned=false" >> "${GITHUB_OUTPUT}"
+          echo "Issue ${ISSUE_URL} is not open; leaving it unassigned." >> "${GITHUB_STEP_SUMMARY}"
+          exit 0
+        fi
+        if ! gh issue edit "${ISSUE_URL}" --add-assignee "@copilot"; then
+          echo "::warning::Created ${ISSUE_URL} but could not assign it to Copilot. COPILOT_ORCHESTRATOR_ENV_TOKEN must be a user token (not GITHUB_TOKEN or a GitHub App installation token) for a user with Copilot cloud agent access, and Copilot cloud agent must be enabled for the repository. Set assign_copilot: false to skip assignment."
+          echo "copilot_assigned=false" >> "${GITHUB_OUTPUT}"
+          echo "Could not assign ${ISSUE_URL} to Copilot; see the run warnings." >> "${GITHUB_STEP_SUMMARY}"
+          exit 0
+        fi
+        echo "copilot_assigned=true" >> "${GITHUB_OUTPUT}"
+        echo "Assigned ${ISSUE_URL} to Copilot" >> "${GITHUB_STEP_SUMMARY}"
