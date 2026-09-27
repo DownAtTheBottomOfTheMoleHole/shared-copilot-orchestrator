@@ -6,6 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const scriptPath = path.join(__dirname, "..", "scripts", "request-pr-fix.sh");
+const actionPath = path.join(__dirname, "..", "action.yml");
 const sha = "abcdef1234567890abcdef1234567890abcdef12";
 
 function runRequest(options = {}) {
@@ -102,4 +103,14 @@ test("reuses an existing matching comment", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.output, `pr_comment_url=${existing}\n`);
   assert.equal(result.postedBody, null);
+});
+
+test("composite action wires the PR-comment handoff safely", () => {
+  const action = fs.readFileSync(actionPath, "utf8");
+
+  assert.match(action, /handoff_mode:/);
+  assert.match(action, /pr_comment_url:/);
+  assert.match(action, /inputs\.handoff_mode == 'pull_request_comment'/);
+  assert.match(action, /scripts\/request-pr-fix\.sh/);
+  assert.doesNotMatch(action, /REVIEW_PAYLOAD="\$\(cat "\$\{PAYLOAD_FILE\}"\)"/);
 });

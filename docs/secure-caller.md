@@ -8,8 +8,9 @@ The trusted workflow must validate the artifact against GitHub's API; the
 artifact itself is untrusted data.
 
 The example below requests changes **on the reviewed pull request branch** by
-posting a PR comment. The reusable workflow's default `issue` mode remains
-available for tasks intentionally started from the repository default branch.
+posting a PR comment through the SHA-pinned composite action. The action's
+default `issue` mode remains available for tasks intentionally started from the
+repository default branch.
 
 1. Add `.github/workflows/collect-copilot-review.yml` to the caller repository:
 
@@ -125,27 +126,34 @@ available for tasks intentionally started from the repository default branch.
      handoff:
        needs: validate
        if: needs.validate.outputs.valid == 'true'
+       runs-on: ubuntu-latest
+       environment: copilot-orchestrator
        permissions:
          contents: read
-       uses: DownAtTheBottomOfTheMoleHole/shared-copilot-orchestrator/.github/workflows/copilot-orchestrator.yml@<RELEASE_COMMIT_SHA>
-       with:
-         target_repository: ${{ github.repository }}
-         target_pr_number: ${{ needs.validate.outputs.pr_number }}
-         target_sha: ${{ needs.validate.outputs.review_sha }}
-         review_payload: ${{ needs.validate.outputs.review_payload }}
-         handoff_mode: pull_request_comment
-         assign_copilot: true
-       secrets:
-         target_repo_token: ${{ secrets.COPILOT_ORCHESTRATOR_TOKEN }}
+       steps:
+         - uses: DownAtTheBottomOfTheMoleHole/shared-copilot-orchestrator@<RELEASE_COMMIT_SHA>
+           with:
+             target_repository: ${{ github.repository }}
+             target_pr_number: ${{ needs.validate.outputs.pr_number }}
+             target_sha: ${{ needs.validate.outputs.review_sha }}
+             review_payload: ${{ needs.validate.outputs.review_payload }}
+             handoff_mode: pull_request_comment
+             assign_copilot: 'true'
+             target_repo_token: ${{ secrets.COPILOT_ORCHESTRATOR_ENV_TOKEN }}
    ```
 
-Store `COPILOT_ORCHESTRATOR_TOKEN` as a short-lived, repository-scoped user
-token owned by someone with write access and Copilot cloud agent access. Only
-the trusted `handoff` job receives it. The reusable workflow uses its
-user token for reading review comments and posting the request. A fine-grained
-token needs **pull requests: write** or **issues: write**
-to post a PR comment. A PR comment with `@copilot` asks the agent to work on the existing PR;
-the workflow does not prove that a cloud-agent session started. Check the
+Create a `copilot-orchestrator` environment in the caller repository before
+enabling the handoff. Restrict it to the protected default branch and store the
+short-lived, repository-scoped user token only as
+`COPILOT_ORCHESTRATOR_ENV_TOKEN` in that environment. The token owner needs
+write access and Copilot cloud agent access. Do not keep a repository or
+organisation copy of this token.
+
+Only the trusted `handoff` job receives the environment token. The composite
+action uses it for reading review comments and posting the request. A
+fine-grained token needs **pull requests: write** or **issues: write** to post a
+PR comment. A PR comment with `@copilot` asks the agent to work on the existing
+PR; the action does not prove that a cloud-agent session started. Check the
 comment and agent session in an integration test before enabling automatic
 handoffs.
 
