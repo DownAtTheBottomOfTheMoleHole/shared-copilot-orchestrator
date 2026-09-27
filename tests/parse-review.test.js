@@ -12,19 +12,24 @@ const validEnvironment = {
   TARGET_SHA: "abcdef1234567",
 };
 
-function runParser(reviewPayload, environment = {}) {
+function runParser(reviewPayload, environment = {}, options = {}) {
   const outputDirectory = fs.mkdtempSync(
     path.join(os.tmpdir(), "orchestrator-parser-"),
   );
   const outputPath = path.join(outputDirectory, "github-output");
+  const payloadPath = path.join(outputDirectory, "review-payload.json");
 
   try {
+    if (options.fromFile) {
+      fs.writeFileSync(payloadPath, reviewPayload);
+    }
     const result = spawnSync(process.execPath, [parserPath], {
       encoding: "utf8",
       env: {
         ...process.env,
         ...validEnvironment,
-        REVIEW_PAYLOAD: reviewPayload,
+        REVIEW_PAYLOAD: options.fromFile ? "" : reviewPayload,
+        ...(options.fromFile ? { PAYLOAD_FILE: payloadPath } : {}),
         GITHUB_OUTPUT: outputPath,
         ...environment,
       },
@@ -82,6 +87,52 @@ test("findings without a body are not actionable", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(parseOutputs(result.output).actionableCount, 0);
+});
+
+test("filters empty findings before applying the 50-finding display limit", () => {
+  const payload = JSON.stringify({
+    findings: [
+      ...Array.from({ length: 50 }, () => ({ body: " " })),
+      { path: "important.js", line: 7, body: "Fix the valid finding" },
+    ],
+  });
+  const result = runParser(payload);
+
+  assert.equal(result.status, 0, result.stderr);
+  const { body, actionableCount } = parseOutputs(result.output);
+  assert.equal(actionableCount, 1);
+  assert.match(body, /1\. \*\*unspecified\*\* \(important\\\.js:7\)/);
+  assert.match(body, /Fix the valid finding/);
+});
+
+test("reports omitted findings and fingerprints all actionable findings", () => {
+  const findings = Array.from({ length: 51 }, (_, index) => ({
+    path: `file${index}.js`,
+    body: `Fix finding ${index}`,
+  }));
+  const first = parseOutputs(runParser(JSON.stringify({ findings })).output);
+  const lastChanged = parseOutputs(
+    runParser(JSON.stringify({ findings: [...findings.slice(0, 50), { path: "changed.js", body: "Different" }] })).output,
+  );
+
+  assert.equal(first.actionableCount, 51);
+  assert.match(first.body, /1 additional finding\(s\) omitted/);
+  assert.doesNotMatch(first.body, /Fix finding 50/);
+  assert.notEqual(first.marker, lastChanged.marker);
+});
+
+test("reads large collected review payloads from a file", () => {
+  const payload = JSON.stringify({
+    findings: Array.from({ length: 35 }, (_, index) => ({
+      path: `file${index}.js`,
+      body: "x".repeat(4000),
+    })),
+  });
+  assert.ok(Buffer.byteLength(payload) > 131072);
+  const result = runParser(payload, {}, { fromFile: true });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(parseOutputs(result.output).actionableCount, 35);
 });
 
 test("a Copilot overview with no inline findings is not actionable", () => {
