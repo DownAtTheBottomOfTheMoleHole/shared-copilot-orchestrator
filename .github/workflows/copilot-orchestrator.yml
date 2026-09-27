@@ -26,6 +26,9 @@ on:
         type: boolean
         default: true
     secrets:
+      COPILOT_ORCHESTRATOR_ENV_TOKEN:
+        description: Caller repository environment secret; do not pass from the caller workflow
+        required: false
       target_repo_token:
         description: Deprecated and ignored; configure COPILOT_ORCHESTRATOR_ENV_TOKEN in the caller repository's copilot-orchestrator environment
         required: false
