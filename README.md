@@ -14,9 +14,12 @@ Enterprise reusable GitHub Actions workflow for converting Copilot code review f
 
 ```mermaid
 flowchart TD
-    A[Caller Repo PR Comment/Review Payload] --> B[shared-copilot-orchestrator<br>.github/workflows/workflow_call]
-    B --> C[Issue Created in Caller Repo]
-    C --> D["Issue assigned to Copilot -> Copilot cloud agent opens a fix PR"]
+    A[PR review] --> B[Unprivileged review signal]
+    B --> C[Trusted workflow_run dispatcher]
+    C --> D[Validate review using GitHub API]
+    D --> E[Shared workflow in protected environment]
+    E --> F[Issue in caller repo]
+    F --> G[Copilot cloud agent opens a fix PR]
 ```
 
 ## What this workflow does
@@ -59,35 +62,18 @@ node --test tests/*.test.js
 
 Pull requests are checked for Conventional Commit subjects and linted with MegaLinter (actionlint, ESLint, markdownlint and yamllint). Keep commits atomic: each commit should represent one focused, independently understandable change. CI checks conventional formatting; reviewers assess whether commits are atomic. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution and release conventions.
 
-## Usage (copy/paste)
+## Caller setup
 
-Add a workflow to the repository that should receive the issues. Pin the reusable workflow to a reviewed release tag, or to that release's full commit SHA for immutability.
+A [`pull_request_review` workflow](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_review) runs from the PR merge ref. For a same-repository PR, its proposed workflow changes can run when a review is submitted. Do not pass a personal access token to that workflow, including through a direct reusable-workflow call.
 
-```yaml
-name: Copilot review handoff
+Use two caller workflows:
 
-on:
-  pull_request_review:
-    types: [submitted]
+1. **Review signal:** On `pull_request_review: submitted`, run with `permissions: {}`, no secrets and no checkout. Upload an artifact named `copilot-review-signal` containing only plain numeric `review-id` and `pr-number` files. This artifact is untrusted data.
+2. **Trusted handoff:** On [`workflow_run` completion](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run) of the signal workflow, run from the default branch. Fetch the artifact from that exact run and validate its size and numeric fields. Use the read-only `GITHUB_TOKEN` to fetch the PR and review from GitHub's API. Confirm the Copilot reviewer identity, PR and review linkage, same-repository head, run identity and timing. Derive `target_sha` from the API review's `commit_id`, then call this reusable workflow in a separate job. Pass a minimal review payload containing the validated review ID; the reusable workflow fetches inline comments itself. Do not check out or execute PR code or artifact content in the privileged run.
 
-permissions:
-  contents: read
+The [app caller](https://github.com/DownAtTheBottomOfTheMoleHole/rachels-bakes/pull/326), [Terraform caller](https://github.com/DownAtTheBottomOfTheMoleHole/rachels-bakes-terraform/pull/68) and [brand caller](https://github.com/DownAtTheBottomOfTheMoleHole/rachels-bakes-brand/pull/4) show complete examples. Pin the reusable workflow to a reviewed release's full commit SHA for an immutable handoff.
 
-jobs:
-  orchestrate:
-    # Example filter: only hand off reviews submitted by Copilot. Confirm the
-    # reviewer login used in your repository before relying on it.
-    if: github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
-    uses: DownAtTheBottomOfTheMoleHole/shared-copilot-orchestrator/.github/workflows/copilot-orchestrator.yml@v1.1.1
-    with:
-      target_repository: ${{ github.repository }}
-      target_pr_number: ${{ format('{0}', github.event.pull_request.number) }}
-      target_sha: ${{ github.event.pull_request.head.sha }}
-      review_payload: ${{ toJson(github.event.review) }}
-      assign_copilot: true
-    secrets:
-      target_repo_token: ${{ secrets.COPILOT_ORCHESTRATOR_TOKEN }}
-```
+Before enabling the handoff, create an environment named `copilot-orchestrator` in the **caller** repository. Restrict deployment branches and tags to `main` under **Selected branches and tags**, and place `COPILOT_ORCHESTRATOR_ENV_TOKEN` in that environment. GitHub can create an unrestricted environment automatically when a workflow names one that does not exist, so configure the branch restriction first. Remove any previous repository or organisation secret used for this handoff. The reusable workflow accepts the old `target_repo_token` secret parameter for caller syntax compatibility, but ignores it. Caller jobs should not pass a `secrets:` block.
 
 ### Inputs and outputs
 
@@ -98,7 +84,8 @@ jobs:
 | `target_sha` | input, required | Commit SHA the findings relate to. |
 | `review_payload` | input, optional | JSON review payload: a review object (only its inline comments are used as findings), a findings array, or `{ "findings": [...] }`. |
 | `assign_copilot` | input, optional | Assign the issue to Copilot when there are actionable findings. Defaults to `true`. |
-| `target_repo_token` | secret, required | Token used to create and assign the issue (see below). |
+| `target_repo_token` | secret, deprecated | Accepted for caller syntax compatibility but ignored. |
+| `COPILOT_ORCHESTRATOR_ENV_TOKEN` | caller environment secret, required | Token used to read review comments and create or assign the issue (see below). |
 | `issue_url` | output | URL of the created or reused issue; empty when no actionable findings were parsed. |
 | `actionable_count` | output | Number of actionable findings parsed. |
 | `copilot_assigned` | output | `'true'` when Copilot is assigned to the created or reused issue. |
@@ -109,14 +96,14 @@ Copilot cloud agent starts work when an issue is assigned to it; mentioning `@co
 
 - Use a fine-grained personal access token scoped to the caller repository with read and write access to **actions**, **contents**, **issues** and **pull requests** (or a classic token with `repo`).
 - The token owner must have a Copilot plan with Copilot cloud agent access, and Copilot cloud agent must be enabled for the repository.
-- Store it as a repository or organisation secret, for example `COPILOT_ORCHESTRATOR_TOKEN`.
-- Secrets are not available to `pull_request_review` runs from forks, so the handoff only runs for same-repository pull requests.
+- Store it only as `COPILOT_ORCHESTRATOR_ENV_TOKEN` in the caller repository's `copilot-orchestrator` environment, restricted to `main`. Do not keep a repository or organisation copy.
+- The trusted dispatcher rejects fork and Dependabot PRs before calling the reusable workflow. The shared job also refuses calls outside `workflow_run` on `main` and fails if the environment token is absent.
 
-If assignment fails, the issue is still created, the run reports a warning and `copilot_assigned` is `'false'`. If you only need issues, set `assign_copilot: false`; the token then needs only **issues: write** and **metadata: read**.
+If assignment fails, the issue is still created, the run reports a warning and `copilot_assigned` is `'false'`. If you only need issues, set `assign_copilot: false`; the token then needs **issues: write**, **pull requests: read** and **metadata: read**.
 
 ## Security posture
 
-- The reusable workflow requests only `contents: read` for `GITHUB_TOKEN`; issue creation uses the caller-supplied token.
+- The reusable workflow requests only `contents: read` for `GITHUB_TOKEN`; review access and issue creation use the caller environment token after its branch restriction passes.
 - Issues can only be created in the caller repository, even if the supplied token can reach other repositories.
 - Untrusted review text is sanitised before issue rendering, and outputs use random heredoc delimiters so findings cannot inject workflow outputs.
 - All actions are pinned to full commit SHAs.
