@@ -25,6 +25,11 @@ on:
         required: false
         type: boolean
         default: true
+      handoff_mode:
+        description: "issue (default) or pull_request_comment to request fixes on the reviewed PR branch"
+        required: false
+        type: string
+        default: issue
     secrets:
       target_repo_token:
         description: user token (fine-grained PAT) for the caller repository; see README for required permissions
@@ -32,16 +37,19 @@ on:
     outputs:
       issue_url:
         description: URL of the created issue
-        value: ${{ jobs.create-copilot-issue.outputs.issue_url }}
+        value: ${{ jobs.handoff.outputs.issue_url }}
+      pr_comment_url:
+        description: URL of the PR comment requesting a fix; empty in issue mode
+        value: ${{ jobs.handoff.outputs.pr_comment_url }}
       actionable_count:
         description: number of actionable findings parsed from the payload
-        value: ${{ jobs.create-copilot-issue.outputs.actionable_count }}
+        value: ${{ jobs.handoff.outputs.actionable_count }}
       copilot_assigned:
         description: "'true' when the issue was assigned to Copilot"
-        value: ${{ jobs.create-copilot-issue.outputs.copilot_assigned }}
+        value: ${{ jobs.handoff.outputs.copilot_assigned }}
 
 jobs:
-  create-copilot-issue:
+  handoff:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -53,6 +61,7 @@ jobs:
       contents: read
     outputs:
       issue_url: ${{ steps.create.outputs.issue_url }}
+      pr_comment_url: ${{ steps.comment.outputs.pr_comment_url }}
       actionable_count: ${{ steps.parse.outputs.actionable_count }}
       copilot_assigned: ${{ steps.assign.outputs.copilot_assigned || 'false' }}
     steps:
@@ -70,6 +79,8 @@ jobs:
           GH_TOKEN: ${{ secrets.target_repo_token }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
           TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+          HANDOFF_MODE: ${{ inputs.handoff_mode }}
+          ASSIGN_COPILOT: ${{ inputs.assign_copilot }}
         run: |
           set -euo pipefail
           if [[ "${TARGET_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
@@ -78,6 +89,14 @@ jobs:
           fi
           if [[ ! "${TARGET_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::target_pr_number must be a positive integer."
+            exit 1
+          fi
+          if [[ "${HANDOFF_MODE}" != 'issue' && "${HANDOFF_MODE}" != 'pull_request_comment' ]]; then
+            echo "::error::handoff_mode must be issue or pull_request_comment."
+            exit 1
+          fi
+          if [[ "${HANDOFF_MODE}" == 'pull_request_comment' && "${ASSIGN_COPILOT}" != 'true' ]]; then
+            echo "::error::pull_request_comment mode requires assign_copilot: true."
             exit 1
           fi
           if ! gh api "repos/${TARGET_REPOSITORY}" --jq '.full_name' >/dev/null; then
@@ -123,13 +142,11 @@ jobs:
           PAYLOAD_FILE: ${{ steps.collect.outputs.payload_file }}
         run: |
           set -euo pipefail
-          REVIEW_PAYLOAD="$(cat "${PAYLOAD_FILE}")"
-          export REVIEW_PAYLOAD
           node orchestrator/scripts/parse-review.js
 
       - name: Create issue in caller repository
         id: create
-        if: steps.parse.outputs.actionable_count != '0'
+        if: inputs.handoff_mode == 'issue' && steps.parse.outputs.actionable_count != '0'
         env:
           GH_TOKEN: ${{ secrets.target_repo_token }}
           TARGET_REPOSITORY: ${{ inputs.target_repository }}
@@ -168,7 +185,7 @@ jobs:
       # @copilot in an issue body does not start a session.
       - name: Assign issue to Copilot
         id: assign
-        if: inputs.assign_copilot && steps.create.outputs.issue_url != ''
+        if: inputs.handoff_mode == 'issue' && inputs.assign_copilot && steps.create.outputs.issue_url != ''
         env:
           GH_TOKEN: ${{ secrets.target_repo_token }}
           ISSUE_URL: ${{ steps.create.outputs.issue_url }}
@@ -201,3 +218,17 @@ jobs:
           fi
           echo "copilot_assigned=true" >> "${GITHUB_OUTPUT}"
           echo "Assigned ${ISSUE_URL} to Copilot" >> "${GITHUB_STEP_SUMMARY}"
+
+      # A PR comment addresses the branch under review, unlike assigning an
+      # issue (which starts the cloud agent from the repository default branch).
+      - name: Request Copilot changes on the reviewed PR
+        id: comment
+        if: inputs.handoff_mode == 'pull_request_comment' && steps.parse.outputs.actionable_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.target_repo_token }}
+          TARGET_REPOSITORY: ${{ inputs.target_repository }}
+          TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          ISSUE_BODY: ${{ steps.parse.outputs.issue_body }}
+          ISSUE_MARKER: ${{ steps.parse.outputs.issue_marker }}
+        run: bash orchestrator/scripts/request-pr-fix.sh
