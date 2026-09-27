@@ -22,9 +22,18 @@ flowchart TD
 ## What this workflow does
 
 - Accepts PR metadata and review payload via `workflow_call`.
+- Uses inline comments from a submitted review as findings; Copilot's overview
+  text is not treated as a finding.
 - Sanitizes untrusted review text with `scripts/parse-review.js`.
-- Creates a GitHub Issue in the caller repository containing the sanitised findings.
-- Assigns the issue to Copilot when at least one actionable finding is parsed, which starts a Copilot cloud agent session. Set `assign_copilot: false` to create the issue only.
+- Creates a GitHub Issue in the caller repository only when actionable findings
+  exist. An identical set of findings on the same PR commit reuses an existing
+  issue on a best-effort basis: the workflow reads the newest 100 issues directly
+  and uses GitHub search for older issues, whose indexing may lag.
+- Assigns a new or reused issue to Copilot when actionable findings are parsed
+  and the issue is open with Copilot not already an assignee. A transient
+  assignment failure can therefore be retried without creating another issue;
+  closed matches are left closed. Set `assign_copilot: false` to create the
+  issue only.
 - Runs the parser from the same commit as the called workflow version, with explicit least-privilege permissions.
 
 ## Releases
@@ -68,11 +77,11 @@ jobs:
   orchestrate:
     # Example filter: only hand off reviews submitted by Copilot. Confirm the
     # reviewer login used in your repository before relying on it.
-    if: github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
-    uses: DownAtTheBottomOfTheMoleHole/shared-copilot-orchestrator/.github/workflows/copilot-orchestrator.yml@v1.1.0
+    if: github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
+    uses: DownAtTheBottomOfTheMoleHole/shared-copilot-orchestrator/.github/workflows/copilot-orchestrator.yml@v1.1.1
     with:
       target_repository: ${{ github.repository }}
-      target_pr_number: ${{ github.event.pull_request.number }}
+      target_pr_number: ${{ format('{0}', github.event.pull_request.number) }}
       target_sha: ${{ github.event.pull_request.head.sha }}
       review_payload: ${{ toJson(github.event.review) }}
       assign_copilot: true
@@ -87,12 +96,12 @@ jobs:
 | `target_repository` | input, required | `owner/repo` for the issue; must equal the caller repository. |
 | `target_pr_number` | input, required | Pull request number the findings relate to. |
 | `target_sha` | input, required | Commit SHA the findings relate to. |
-| `review_payload` | input, optional | JSON review payload: a review object (its inline comments are fetched automatically), a findings array, or `{ "findings": [...] }`. |
+| `review_payload` | input, optional | JSON review payload: a review object (only its inline comments are used as findings), a findings array, or `{ "findings": [...] }`. |
 | `assign_copilot` | input, optional | Assign the issue to Copilot when there are actionable findings. Defaults to `true`. |
 | `target_repo_token` | secret, required | Token used to create and assign the issue (see below). |
-| `issue_url` | output | URL of the created issue. |
+| `issue_url` | output | URL of the created or reused issue; empty when no actionable findings were parsed. |
 | `actionable_count` | output | Number of actionable findings parsed. |
-| `copilot_assigned` | output | `'true'` when the issue was assigned to Copilot. |
+| `copilot_assigned` | output | `'true'` when Copilot is assigned to the created or reused issue. |
 
 ### Token requirements
 

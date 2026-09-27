@@ -12,7 +12,7 @@ const validEnvironment = {
   TARGET_SHA: "abcdef1234567",
 };
 
-function runParser(reviewPayload) {
+function runParser(reviewPayload, environment = {}) {
   const outputDirectory = fs.mkdtempSync(
     path.join(os.tmpdir(), "orchestrator-parser-"),
   );
@@ -26,6 +26,7 @@ function runParser(reviewPayload) {
         ...validEnvironment,
         REVIEW_PAYLOAD: reviewPayload,
         GITHUB_OUTPUT: outputPath,
+        ...environment,
       },
     });
 
@@ -52,13 +53,14 @@ function parseOutputs(output) {
   }
   assert.deepEqual(
     Object.keys(records),
-    ["issue_title", "issue_body", "actionable_count"],
-    "expected title, body, and actionable count output records",
+    ["issue_title", "issue_body", "actionable_count", "issue_marker"],
+    "expected title, body, actionable count, and marker output records",
   );
   return {
     title: records.issue_title,
     body: records.issue_body,
     actionableCount: Number(records.actionable_count),
+    marker: records.issue_marker,
   };
 }
 
@@ -82,6 +84,20 @@ test("findings without a body are not actionable", () => {
   assert.equal(parseOutputs(result.output).actionableCount, 0);
 });
 
+test("a Copilot overview with no inline findings is not actionable", () => {
+  const result = runParser(
+    JSON.stringify({
+      body: "Copilot review overview: Approval recommended; Findings: None",
+      findings: [],
+    }),
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const { body, actionableCount } = parseOutputs(result.output);
+  assert.equal(actionableCount, 0);
+  assert.doesNotMatch(body, /Approval recommended/);
+});
+
 test("structured findings are sanitized and included in the issue output", () => {
   const result = runParser(
     JSON.stringify({
@@ -97,7 +113,7 @@ test("structured findings are sanitized and included in the issue output", () =>
   );
 
   assert.equal(result.status, 0, result.stderr);
-  const { title, body, actionableCount } = parseOutputs(result.output);
+  const { title, body, actionableCount, marker } = parseOutputs(result.output);
   assert.equal(title, "Copilot review findings for PR #42");
   assert.match(body, /&lt;unsafe&gt;/);
   assert.match(body, /@​everyone/);
@@ -106,6 +122,42 @@ test("structured findings are sanitized and included in the issue output", () =>
   assert.doesNotMatch(body, /@copilot/);
   assert.match(body, /Copilot: please propose and implement a fix/);
   assert.equal(actionableCount, 1);
+  assert.match(marker, /^Review fingerprint: [0-9a-f]{64}$/);
+  assert.ok(body.endsWith(marker));
+});
+
+test("identical findings use one marker and changed findings use another", () => {
+  const first = JSON.stringify({ findings: [{ path: "a.js", body: "Fix this" }] });
+  const changed = JSON.stringify({ findings: [{ path: "a.js", body: "Fix that" }] });
+  const firstRun = parseOutputs(runParser(first).output);
+  const retry = parseOutputs(runParser(first).output);
+  const updated = parseOutputs(runParser(changed).output);
+  const newCommit = parseOutputs(runParser(first, { TARGET_SHA: "fedcba1234567" }).output);
+
+  assert.equal(firstRun.marker, retry.marker);
+  assert.notEqual(firstRun.marker, updated.marker);
+  assert.notEqual(firstRun.marker, newCommit.marker);
+});
+
+test("finding order and non-actionable entries do not change the marker", () => {
+  const first = JSON.stringify({
+    findings: [
+      { path: "a.js", line: 1, body: "Fix A" },
+      { path: "b.js", line: 2, body: "Fix B" },
+    ],
+  });
+  const reordered = JSON.stringify({
+    findings: [
+      { path: "ignored.js", body: " " },
+      { path: "b.js", line: 2, body: "Fix B" },
+      { path: "a.js", line: 1, body: "Fix A" },
+    ],
+  });
+
+  assert.equal(
+    parseOutputs(runParser(first).output).marker,
+    parseOutputs(runParser(reordered).output).marker,
+  );
 });
 
 test("legacy review body payloads produce an actionable finding", () => {
