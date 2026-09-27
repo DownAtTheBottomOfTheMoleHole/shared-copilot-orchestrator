@@ -55,7 +55,9 @@ jobs:
       - name: Explain migration to the protected composite action
         id: skip
         run: |
-          echo 'issue_url=' >> "${GITHUB_OUTPUT}"
-          echo 'actionable_count=0' >> "${GITHUB_OUTPUT}"
-          echo 'copilot_assigned=false' >> "${GITHUB_OUTPUT}"
+          {
+            echo 'issue_url='
+            echo 'actionable_count=0'
+            echo 'copilot_assigned=false'
+          } >> "${GITHUB_OUTPUT}"
           echo 'Copilot handoff skipped: this reusable workflow is deprecated. Use the SHA-pinned composite action from a trusted workflow_run job in the copilot-orchestrator environment.' >> "${GITHUB_STEP_SUMMARY}"
