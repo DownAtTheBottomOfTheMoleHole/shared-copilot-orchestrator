@@ -1,5 +1,5 @@
 name: Copilot review handoff
-description: Turn validated Copilot review comments into an issue and optional Copilot assignment.
+description: Turn validated Copilot review comments into an issue or a fix request on the reviewed pull request.
 
 inputs:
   target_repository:
@@ -16,9 +16,13 @@ inputs:
     required: false
     default: ''
   assign_copilot:
-    description: Assign an actionable issue to Copilot
+    description: Assign an actionable issue to Copilot; must be true for pull_request_comment mode
     required: false
     default: 'true'
+  handoff_mode:
+    description: issue (default) or pull_request_comment to request fixes on the reviewed PR branch
+    required: false
+    default: issue
   target_repo_token:
     description: Caller environment token; leave empty to skip the handoff
     required: false
@@ -27,6 +31,9 @@ outputs:
   issue_url:
     description: URL of the created or reused issue
     value: ${{ steps.create.outputs.issue_url }}
+  pr_comment_url:
+    description: URL of the created or reused PR comment; empty in issue mode
+    value: ${{ steps.comment.outputs.pr_comment_url }}
   actionable_count:
     description: Number of actionable findings parsed
     value: ${{ steps.parse.outputs.actionable_count || '0' }}
@@ -43,6 +50,8 @@ runs:
         ORCHESTRATOR_TOKEN: ${{ inputs.target_repo_token }}
         TARGET_REPOSITORY: ${{ inputs.target_repository }}
         TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+        HANDOFF_MODE: ${{ inputs.handoff_mode }}
+        ASSIGN_COPILOT: ${{ inputs.assign_copilot }}
       shell: bash
       run: |
         set -euo pipefail
@@ -56,6 +65,14 @@ runs:
         fi
         if [[ ! "${TARGET_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
           echo '::error::target_pr_number must be a positive integer.'
+          exit 1
+        fi
+        if [[ "${HANDOFF_MODE}" != 'issue' && "${HANDOFF_MODE}" != 'pull_request_comment' ]]; then
+          echo '::error::handoff_mode must be issue or pull_request_comment.'
+          exit 1
+        fi
+        if [[ "${HANDOFF_MODE}" == 'pull_request_comment' && "${ASSIGN_COPILOT}" != 'true' ]]; then
+          echo '::error::pull_request_comment mode requires assign_copilot: true.'
           exit 1
         fi
         if [[ -z "${ORCHESTRATOR_TOKEN}" ]]; then
@@ -130,13 +147,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        REVIEW_PAYLOAD="$(cat "${PAYLOAD_FILE}")"
-        export REVIEW_PAYLOAD
         node "${ACTION_PATH}/scripts/parse-review.js"
 
     - name: Create issue in caller repository
       id: create
-      if: steps.token.outputs.available == 'true' && steps.parse.outputs.actionable_count != '0'
+      if: steps.token.outputs.available == 'true' && inputs.handoff_mode == 'issue' && steps.parse.outputs.actionable_count != '0'
       env:
         GH_TOKEN: ${{ inputs.target_repo_token }}
         TARGET_REPOSITORY: ${{ inputs.target_repository }}
@@ -172,11 +187,25 @@ runs:
         echo "issue_url=${issue_url}" >> "${GITHUB_OUTPUT}"
         echo "Created ${issue_url}" >> "${GITHUB_STEP_SUMMARY}"
 
+    - name: Request fixes on reviewed pull request
+      id: comment
+      if: steps.token.outputs.available == 'true' && inputs.handoff_mode == 'pull_request_comment' && steps.parse.outputs.actionable_count != '0'
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        GH_TOKEN: ${{ inputs.target_repo_token }}
+        TARGET_REPOSITORY: ${{ inputs.target_repository }}
+        TARGET_PR_NUMBER: ${{ inputs.target_pr_number }}
+        TARGET_SHA: ${{ inputs.target_sha }}
+        ISSUE_BODY: ${{ steps.parse.outputs.issue_body }}
+        ISSUE_MARKER: ${{ steps.parse.outputs.issue_marker }}
+      shell: bash
+      run: bash "${ACTION_PATH}/scripts/request-pr-fix.sh"
+
     # Copilot cloud agent starts when an issue is assigned to it; mentioning
     # @copilot in an issue body does not start a session.
     - name: Assign issue to Copilot
       id: assign
-      if: steps.token.outputs.available == 'true' && inputs.assign_copilot == 'true' && steps.create.outputs.issue_url != ''
+      if: steps.token.outputs.available == 'true' && inputs.handoff_mode == 'issue' && inputs.assign_copilot == 'true' && steps.create.outputs.issue_url != ''
       env:
         GH_TOKEN: ${{ inputs.target_repo_token }}
         ISSUE_URL: ${{ steps.create.outputs.issue_url }}

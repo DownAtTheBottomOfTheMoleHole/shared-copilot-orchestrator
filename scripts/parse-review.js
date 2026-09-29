@@ -88,7 +88,7 @@ function parseReviewPayload(rawPayload) {
   return [];
 }
 
-function toFindingLine(finding, index) {
+function toFindingLine(finding) {
   const path = sanitizeText(String(finding.path || "unknown"), 200, {
     neutralizeMentions: true,
   });
@@ -107,10 +107,16 @@ function toFindingLine(finding, index) {
   }
 
   return {
-    actionable: true,
     fingerprintText: `${severity}\n${path}\n${line}\n${body}`,
-    text: `${index + 1}. **${severity}** (${path}:${line}) - ${body}`,
+    text: `**${severity}** (${path}:${line}) - ${body}`,
   };
+}
+
+function getReviewPayload() {
+  const payloadFile = process.env.PAYLOAD_FILE;
+  return payloadFile
+    ? fs.readFileSync(payloadFile, "utf8")
+    : process.env.REVIEW_PAYLOAD || "";
 }
 
 function writeOutput(name, value) {
@@ -131,15 +137,13 @@ function main() {
   );
   const targetPrNumber = validatePrNumber(getRequiredEnv("TARGET_PR_NUMBER"));
   const targetSha = validateSha(getRequiredEnv("TARGET_SHA"));
-  const findings = parseReviewPayload(process.env.REVIEW_PAYLOAD || "");
+  const findings = parseReviewPayload(getReviewPayload());
 
-  const renderedFindings = findings
-    .slice(0, 50)
-    .map((finding, index) => toFindingLine(finding || {}, index))
+  const actionableFindings = findings
+    .map((finding) => toFindingLine(finding || {}))
     .filter(Boolean);
-  const actionableFindings = renderedFindings.filter(
-    (finding) => finding.actionable,
-  );
+  const renderedFindings = actionableFindings.slice(0, 50);
+  const omittedCount = actionableFindings.length - renderedFindings.length;
   // Sort only for the fingerprint; keep the original order for issue display.
   const issueMarker = `Review fingerprint: ${createHash("sha256")
     .update(
@@ -147,7 +151,7 @@ function main() {
         targetRepository,
         targetPrNumber,
         targetSha,
-        findings: renderedFindings
+        findings: actionableFindings
           .map((finding) => finding.fingerprintText)
           .sort(),
       }),
@@ -155,7 +159,14 @@ function main() {
     .digest("hex")}`;
   const findingLines =
     renderedFindings.length > 0
-      ? renderedFindings.map((finding) => finding.text).join("\n")
+      ? [
+          ...renderedFindings.map((finding, index) => `${index + 1}. ${finding.text}`),
+          ...(omittedCount > 0
+            ? [
+                `${omittedCount} additional finding(s) omitted from this issue (50-finding display limit).`,
+              ]
+            : []),
+        ].join("\n")
       : "No structured findings were provided in the payload.";
   // Copilot is started by assigning the issue in the workflow; a mention in an
   // issue body does not trigger it, so this line is the task instruction only.

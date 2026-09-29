@@ -8,7 +8,7 @@
 [![Copilot Compatible](https://img.shields.io/badge/Copilot-Compatible-8A2BE2.svg)](https://github.com/features/copilot)
 [![Security](https://img.shields.io/badge/Security-Policy-green.svg)](./.github/SECURITY.md)
 
-SHA-pinned GitHub composite action for converting Copilot code review findings into actionable issues in the source repository and triggering a Copilot coding handoff.
+SHA-pinned GitHub composite action for converting Copilot code review findings into actionable issues or requesting fixes directly on the reviewed pull request branch.
 
 ## Architecture
 
@@ -18,8 +18,11 @@ flowchart TD
     B --> C[Trusted workflow_run dispatcher]
     C --> D[Validate review using GitHub API]
     D --> E[Shared composite action in protected job]
-    E --> F[Issue in caller repo]
-    F --> G[Copilot cloud agent opens a fix PR]
+    E --> F{Handoff mode}
+    F --> G[Issue in caller repo]
+    G --> H[Copilot cloud agent opens a fix PR]
+    F --> I[Validated comment on reviewed PR]
+    I --> J[Copilot request on existing PR branch]
 ```
 
 ## What this action does
@@ -28,6 +31,13 @@ flowchart TD
 - Uses inline comments from a submitted review as findings; Copilot's overview
   text is not treated as a finding.
 - Sanitizes untrusted review text with `scripts/parse-review.js`.
+- Filters non-actionable entries before the 50-finding display limit, reports
+  omitted findings, and includes every actionable finding in the deduplication
+  fingerprint. Large collected reviews are parsed from a file rather than an
+  environment variable.
+- In opt-in `pull_request_comment` mode, validates that the pull request is
+  still open, same-repository, and at the reviewed SHA immediately before
+  posting an `@copilot` fix request on that branch.
 - Creates a GitHub Issue in the caller repository only when actionable findings
   exist. An identical set of findings on the same PR commit reuses an existing
   issue on a best-effort basis: the action reads the newest 100 issues directly
@@ -41,7 +51,7 @@ flowchart TD
 
 ## Releases
 
-Releases are versioned with GitVersion and published automatically when changes reach `main`. The release workflow runs the tests, calculates the version from [`GitVersion.yml`](GitVersion.yml), and creates a `vMAJOR.MINOR.PATCH` tag with notes generated from [`.github/release.yml`](.github/release.yml). It refuses to publish a version older than the latest tag. Conventional commit messages drive the increment:
+Releases are versioned with GitVersion only after a successful push-to-`main` **Quality** run. The release workflow checks out the exact Quality-tested SHA, confirms it is still live `main`, runs the tests again, and calculates the version from [`GitVersion.yml`](GitVersion.yml). Immediately before publication it revalidates `main`; an existing version tag is accepted only when its peeled commit equals the tested SHA. Superseded runs and stale tags therefore fail closed. It also refuses to publish a version older than the latest tag. Conventional commit messages drive the increment:
 
 | Commit | Release |
 | --- | --- |
@@ -71,7 +81,7 @@ Use two caller workflows:
 1. **Review signal:** On `pull_request_review: submitted`, run with `permissions: {}`, no secrets and no checkout. Upload a small artifact named `copilot-review-signal` containing the numeric review ID and PR number, either as plain numeric files or numeric JSON fields. Treat either format as untrusted data.
 2. **Trusted handoff:** On [`workflow_run` completion](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run) of the signal workflow, run from the default branch. Fetch the artifact from that exact run and validate its size and numeric fields. Use the read-only `GITHUB_TOKEN` to fetch the PR and review from GitHub's API. Confirm the Copilot reviewer identity, PR and review linkage, same-repository head, run identity and timing. Derive `target_sha` from the API review's `commit_id`, then run this SHA-pinned composite action as a step in a normal job with `environment: copilot-orchestrator`. Pass a minimal review payload containing the validated review ID and pass the environment secret as `with.target_repo_token`; the action fetches inline comments itself. Do not check out or execute PR code or artifact content in the privileged run.
 
-The [app caller](https://github.com/DownAtTheBottomOfTheMoleHole/rachels-bakes/pull/326), [Terraform caller](https://github.com/DownAtTheBottomOfTheMoleHole/rachels-bakes-terraform/pull/68) and [brand caller](https://github.com/DownAtTheBottomOfTheMoleHole/rachels-bakes-brand/pull/5) show complete validation and handoff examples. After a trusted `verify` job has produced the review details, its downstream job calls the action as a step:
+After a trusted `verify` job has produced the review details, its downstream job calls the action as a step:
 
 ```yaml
 handoff:
@@ -88,6 +98,7 @@ handoff:
         target_pr_number: ${{ needs.verify.outputs.pr_number }}
         target_sha: ${{ needs.verify.outputs.review_commit_id }}
         review_payload: ${{ needs.verify.outputs.review_payload }}
+        handoff_mode: pull_request_comment
         assign_copilot: 'true'
         target_repo_token: ${{ secrets.COPILOT_ORCHESTRATOR_ENV_TOKEN }}
 ```
@@ -106,10 +117,12 @@ The legacy `.github/workflows/copilot-orchestrator.yml` reusable workflow is dis
 | `target_pr_number` | input, required | Pull request number the findings relate to. |
 | `target_sha` | input, required | Commit SHA the findings relate to. |
 | `review_payload` | input, optional | JSON review payload: a review object (only its inline comments are used as findings), a findings array, or `{ "findings": [...] }`. |
-| `assign_copilot` | input, optional | Assign the issue to Copilot when there are actionable findings. Defaults to `true`. |
+| `assign_copilot` | input, optional | Assign the issue to Copilot in issue mode; must be `true` in PR-comment mode. Defaults to `true`. |
+| `handoff_mode` | input, optional | `issue` (default) or `pull_request_comment`. |
 | `target_repo_token` | input, optional | PAT from the caller job’s protected environment; absent token skips cleanly. |
 | `COPILOT_ORCHESTRATOR_ENV_TOKEN` | caller environment secret | Pass as `target_repo_token` from the protected caller job. |
-| `issue_url` | output | URL of the created or reused issue; empty when no actionable findings were parsed. |
+| `issue_url` | output | URL of the created or reused issue; empty in PR-comment mode or when no actionable findings were parsed. |
+| `pr_comment_url` | output | URL of the created or reused PR comment; empty in issue mode or when no comment was posted. |
 | `actionable_count` | output | Number of actionable findings parsed. |
 | `copilot_assigned` | output | `'true'` when Copilot is assigned to the created or reused issue. |
 
@@ -122,13 +135,14 @@ Copilot cloud agent starts work when an issue is assigned to it; mentioning `@co
 - Store it only as `COPILOT_ORCHESTRATOR_ENV_TOKEN` in the caller repository's `copilot-orchestrator` environment, restricted to `main`. Do not keep a repository or organisation copy.
 - The trusted dispatcher rejects fork and Dependabot PRs before invoking the action. The action refuses calls outside `workflow_run` on `main` or targeting another repository. If the environment token is absent, it succeeds with a skipped summary and creates no issue.
 
-If assignment fails, the issue is still created, the run reports a warning and `copilot_assigned` is `'false'`. If you only need issues, set `assign_copilot: false`; the token then needs **issues: write**, **pull requests: read** and **metadata: read**.
+If assignment fails, the issue is still created, the run reports a warning and `copilot_assigned` is `'false'`. If you only need issues, set `assign_copilot: false`; the token then needs **issues: write**, **pull requests: read** and **metadata: read**. PR-comment mode requires a user token able to post pull-request comments (**pull requests: write** or **issues: write**) and should be integration-tested before automated requests are enabled.
 
 ## Security posture
 
 - The trusted caller job uses a read-only `GITHUB_TOKEN` to validate the review. The action uses the protected environment token to read review comments and create issues.
 - Issues can only be created in the caller repository, even if the supplied token can reach other repositories.
-- Untrusted review text is sanitised before issue rendering, and outputs use random heredoc delimiters so findings cannot inject workflow outputs.
+- Untrusted review text is sanitised before issue/comment rendering, and outputs use random heredoc delimiters so findings cannot inject workflow outputs. Escaping does not make natural-language instructions trustworthy; agent changes still require human review and required checks.
+- PR-comment handoffs repeat the open/same-repository/head-SHA validation immediately before posting.
 - All actions are pinned to full commit SHAs.
 - Security disclosures are handled privately per [SECURITY.md](./.github/SECURITY.md).
 
