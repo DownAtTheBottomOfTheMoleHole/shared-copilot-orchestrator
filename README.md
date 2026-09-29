@@ -105,7 +105,7 @@ handoff:
 
 Pin the composite action to a reviewed full commit SHA for an immutable handoff; prefer a released commit. The example assumes the `verify` job emits the named outputs; use the linked callers for the full verification flow.
 
-Before enabling the handoff, create an environment named `copilot-orchestrator` in the **caller** repository. Restrict deployment branches and tags to `main` under **Selected branches and tags**, and place `COPILOT_ORCHESTRATOR_ENV_TOKEN` in that environment. GitHub can create an unrestricted environment automatically when a workflow names one that does not exist, so configure the branch restriction first. Remove any previous repository or organisation secret used for this handoff. The trusted caller job must declare `environment: copilot-orchestrator` and pass `COPILOT_ORCHESTRATOR_ENV_TOKEN` as the action's `target_repo_token` input. Do not use a reusable-workflow caller job or a repository or organisation secret for this token.
+Before enabling the handoff, create an environment named `copilot-orchestrator` in the **caller** repository. Restrict deployment branches and tags to the caller repository's default branch under **Selected branches and tags**, and place `COPILOT_ORCHESTRATOR_ENV_TOKEN` in that environment. GitHub can create an unrestricted environment automatically when a workflow names one that does not exist, so configure the branch restriction first. Remove any previous repository or organisation secret used for this handoff. The trusted caller job must declare `environment: copilot-orchestrator` and pass `COPILOT_ORCHESTRATOR_ENV_TOKEN` as the action's `target_repo_token` input. Do not use a reusable-workflow caller job or a repository or organisation secret for this token.
 
 The legacy `.github/workflows/copilot-orchestrator.yml` reusable workflow is disabled. It returns a skipped summary and never uses a passed token or creates an issue. Move existing direct callers to the composite action before configuring the environment token.
 
@@ -133,7 +133,8 @@ Copilot cloud agent starts work when an issue is assigned to it; mentioning `@co
 - Use a fine-grained personal access token scoped to the caller repository with read and write access to **actions**, **contents**, **issues** and **pull requests** (or a classic token with `repo`).
 - The token owner must have a Copilot plan with Copilot cloud agent access, and Copilot cloud agent must be enabled for the repository.
 - Store it only as `COPILOT_ORCHESTRATOR_ENV_TOKEN` in the caller repository's `copilot-orchestrator` environment, restricted to `main`. Do not keep a repository or organisation copy.
-- The trusted dispatcher rejects fork and Dependabot PRs before invoking the action. The action refuses calls outside `workflow_run` on `main` or targeting another repository. If the environment token is absent, it succeeds with a skipped summary and creates no issue.
+- The trusted dispatcher rejects fork and Dependabot PRs before invoking the action. The action refuses calls outside `workflow_run` on the caller repository's
+default branch or calls targeting another repository. If the environment token is absent, it succeeds with a skipped summary and creates no issue.
 
 If assignment fails, the issue is still created, the run reports a warning and `copilot_assigned` is `'false'`. If you only need issues, set `assign_copilot: false`; the token then needs **issues: write**, **pull requests: read** and **metadata: read**. PR-comment mode requires a user token able to post pull-request comments (**pull requests: write** or **issues: write**) and should be integration-tested before automated requests are enabled.
 
