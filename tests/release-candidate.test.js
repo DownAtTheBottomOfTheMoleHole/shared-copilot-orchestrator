@@ -74,10 +74,10 @@ test("publishes only when Quality tested the checked-out and current main commit
   }
 });
 
-test("release workflow pins and revalidates the Quality-tested SHA", () => {
+test("release workflow checks out main and revalidates the Quality-tested SHA", () => {
   const workflow = fs.readFileSync(workflowPath, "utf8");
 
-  assert.match(workflow, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
+  assert.match(workflow, /ref: refs\/heads\/main/);
   assert.match(workflow, /tag_commit="\$\(git rev-parse "refs\/tags\/\$\{release_tag\}\^\{commit\}"\)"/);
   assert.match(workflow, /if \[\[ "\$\{tag_commit\}" != "\$\{RELEASE_SHA\}" \]\]; then/);
   assert.equal((workflow.match(/^\s+assert_current_main$/gm) || []).length, 2);

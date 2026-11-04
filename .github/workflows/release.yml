@@ -25,7 +25,7 @@ jobs:
       - name: Check out full history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: refs/heads/main
           fetch-depth: 0
           persist-credentials: false
 
