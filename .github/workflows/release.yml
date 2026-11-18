@@ -23,7 +23,7 @@ jobs:
       contents: write
     steps:
       - name: Check out full history
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
@@ -47,14 +47,14 @@ jobs:
 
       - name: Install pinned GitVersion
         if: steps.candidate.outputs.publish == 'true'
-        uses: gittools/actions/gitversion/setup@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
+        uses: gittools/actions/gitversion/setup@389fe43e6b0189b98c40c43553070ac029304635 # v5.0.0
         with:
           versionSpec: '6.8.2'
 
       - name: Calculate version with GitVersion
         if: steps.candidate.outputs.publish == 'true'
         id: gitversion
-        uses: GitTools/actions/gitversion/execute@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
+        uses: GitTools/actions/gitversion/execute@389fe43e6b0189b98c40c43553070ac029304635 # v5.0.0
         with:
           configFilePath: GitVersion.yml
 
